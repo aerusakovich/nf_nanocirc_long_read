@@ -65,6 +65,24 @@
                     "help_text": "This parameter is *mandatory* if `--genome` is not specified. If you don't have a BWA index available this will be generated for you automatically. Combine with `--save_reference` to save BWA index for future runs.",
                     "fa_icon": "far fa-file-code"
                 },
+                "gtf": {
+                    "type": "string",
+                    "format": "file-path",
+                    "exists": true,
+                    "description": "Path to GTF gene annotation file.",
+                    "fa_icon": "fas fa-file-alt"
+                },
+                "circrna_db": {
+                    "type": "string",
+                    "format": "file-path",
+                    "description": "circRNA database BED file (required for isocirc and ciri-long).",
+                    "fa_icon": "fas fa-database"
+                },
+                "genome_index_dir": {
+                    "type": "string",
+                    "description": "Directory to store/reuse BWA genome index. Defaults to <outdir>/genome_index.",
+                    "fa_icon": "fas fa-folder"
+                },
                 "igenomes_ignore": {
                     "type": "boolean",
                     "description": "Do not load the iGenomes reference config.",
@@ -79,6 +97,102 @@
                     "fa_icon": "fas fa-ban",
                     "hidden": true,
                     "default": "s3://ngi-igenomes/igenomes/"
+                }
+            }
+        },
+        "tool_options": {
+            "title": "circRNA tool options",
+            "type": "object",
+            "fa_icon": "fas fa-tools",
+            "description": "Select which circRNA detection tools to run.",
+            "properties": {
+                "run_isocirc": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Run isoCirc for circRNA detection.",
+                    "fa_icon": "fas fa-play"
+                },
+                "run_circfl": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Run CircFL-seq for circRNA detection.",
+                    "fa_icon": "fas fa-play"
+                },
+                "run_cirilong": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Run CIRI-long for circRNA detection.",
+                    "fa_icon": "fas fa-play"
+                },
+                "run_circnick": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Run circnick-lrs for circRNA detection.",
+                    "fa_icon": "fas fa-play"
+                },
+                "circnick_species": {
+                    "type": "string",
+                    "description": "Species for circnick-lrs: 'mouse' or 'human'. Required when --run_circnick is set.",
+                    "enum": ["mouse", "human"],
+                    "fa_icon": "fas fa-paw"
+                },
+                "circnick_liftover_chain": {
+                    "type": "string",
+                    "format": "file-path",
+                    "description": "UCSC chain file for circnick-lrs coordinate liftover (optional).",
+                    "fa_icon": "fas fa-link"
+                }
+            }
+        },
+        "merge_options": {
+            "title": "Merge and confidence options",
+            "type": "object",
+            "fa_icon": "fas fa-object-group",
+            "description": "Options for merging circRNA results and computing confidence scores.",
+            "properties": {
+                "circrna_bsj_tolerance": {
+                    "type": "integer",
+                    "default": 5,
+                    "description": "BSJ coordinate tolerance in bp for relaxed merge mode.",
+                    "fa_icon": "fas fa-ruler"
+                },
+                "circrna_isoform_overlap": {
+                    "type": "number",
+                    "default": 0.95,
+                    "description": "Minimum reciprocal spliced-length overlap fraction for isoform confidence scoring.",
+                    "fa_icon": "fas fa-percentage"
+                }
+            }
+        },
+        "qc_options": {
+            "title": "QC options",
+            "type": "object",
+            "fa_icon": "fas fa-chart-bar",
+            "description": "Options to control quality control steps.",
+            "properties": {
+                "skip_qc": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Skip all QC steps (FastQC, NanoPlot, MultiQC).",
+                    "fa_icon": "fas fa-forward"
+                },
+                "skip_fastqc": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Skip FastQC.",
+                    "fa_icon": "fas fa-forward"
+                },
+                "skip_nanoplot": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Skip NanoPlot.",
+                    "fa_icon": "fas fa-forward"
+                },
+                "skip_multiqc": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Skip MultiQC.",
+                    "fa_icon": "fas fa-forward"
                 }
             }
         },
@@ -246,6 +360,15 @@
         },
         {
             "$ref": "#/$defs/reference_genome_options"
+        },
+        {
+            "$ref": "#/$defs/tool_options"
+        },
+        {
+            "$ref": "#/$defs/merge_options"
+        },
+        {
+            "$ref": "#/$defs/qc_options"
         },
         {
             "$ref": "#/$defs/institutional_config_options"
