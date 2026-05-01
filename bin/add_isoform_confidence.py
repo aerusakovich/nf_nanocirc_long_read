@@ -2,8 +2,8 @@
 """
 add_isoform_confidence.py
 
-Adds three confidence components and a final tool_consensus score to the
-confidence TSV produced by merge_circrna.py.
+Adds three confidence components and two independent consensus labels to the
+confidence TSV produced by merge_circrna.py / smart_merge.py.
 
 Components:
     bsj_score       : percentage of active tools detecting the BSJ → 1-4
@@ -11,8 +11,8 @@ Components:
                         ≤ 50%  → 2
                         ≤ 75%  → 3
                         > 75%  → 4
-    isoform_score   : percentage of active tools with isoform support → 1-4
-                      (same binning, minimum 1 — a single tool agrees with itself)
+    isoform_score   : percentage of active tools supporting this exact exon
+                      structure → 1-4  (same binning, minimum 1)
     overlap_score   : average pairwise spliced-length overlap fraction → 1-4
                         < 25%  → 1
                         25-50% → 2
@@ -20,19 +20,26 @@ Components:
                         ≥ 75%  → 4
                       1 if no pairs (single tool)
 
-Final score = bsj_score + isoform_score + overlap_score  (max 12, min 3)
-    3-4   → Low
-    5-8   → Medium
-    9-12  → High
+Independent consensus labels (score 1→Low, 2-3→Medium, 4→High):
+    bsj_consensus     : quality of BSJ detection across tools
+    isoform_consensus : quality of exon-structure agreement across tools
 
-NOTE: tool_consensus reflects agreement among the tools that were run.
+These two metrics are intentionally separate — a circRNA can have a
+well-supported BSJ but an uncertain exon structure (or vice versa).
+filter_confidence.py uses them independently:
+  no_low       → removes records with Low on EITHER bsj_consensus OR
+                 isoform_consensus
+  trusted_only → removes Low bsj_consensus unless from a trusted tool
+                 (CIRI-long / IsoCirc); also removes Low isoform_consensus
+
+NOTE: scores reflect agreement among the tools that were run.
       Running fewer than 4 tools reduces scoring resolution.
 
 Usage:
     python3 add_isoform_confidence.py \\
-        --confidence  sample_strict_confidence.tsv \\
+        --confidence  sample_smart_consensus_confidence.tsv \\
         --pairs       isocirc_vs_circfl.txt ... \\
-        --output      sample_strict_confidence_final.tsv \\
+        --output      sample_smart_consensus_confidence_scored.tsv \\
         --min_overlap 0.95 \\
         --n_active    4
 """
@@ -50,6 +57,10 @@ def parse_args(args=None):
     parser.add_argument("--min_overlap",  type=float, default=0.95)
     parser.add_argument("--n_active",     type=int,   default=4,
                         help="Number of active detection tools (used for percentage-based scoring)")
+    parser.add_argument("--strip_isoform_suffix", action="store_true", default=False,
+                        help="Strip '|iso*' suffix from bsj_id before pair lookups "
+                             "(required for smart_merge TSVs where isoforms are labelled "
+                             "as chr:start-end:strand|iso1)")
     return parser.parse_args(args)
 
 
@@ -106,11 +117,11 @@ def frac_to_overlap_score(avg_frac):
         return 4
 
 
-def final_score_to_cat(score):
-    """Convert final score (3-12) to tool_consensus category."""
-    if score <= 4:
+def score_to_cat(score):
+    """Convert a 1-4 component score to Low / Medium / High."""
+    if score == 1:
         return "Low"
-    elif score <= 8:
+    elif score <= 3:
         return "Medium"
     else:
         return "High"
@@ -171,26 +182,36 @@ def read_overlapping_pairs(path, tool_a, tool_b, min_overlap):
     return overlapping_a, overlapping_b, fractions
 
 
-def compute_scores(bsj_id, bsj_confidence, tool_flags, all_pair_results, n_active):
+def compute_scores(bsj_id, bsj_confidence, tool_flags, all_pair_results, n_active,
+                   isoform_tools_set=None):
     """
     Compute all three score components for one circRNA.
 
+    isoform_tools_set : optional set of tool names that agree on this specific
+                        isoform's exon structure (from smart_merge 'isoform_tools'
+                        column).  When provided:
+                          - isoform_confidence = len(isoform_tools_set)
+                          - overlap fracs are restricted to pairs where BOTH tools
+                            are in isoform_tools_set, so minority isoforms (single
+                            tool) correctly get overlap_score=1 rather than
+                            inheriting the locus-level pairwise fractions.
+                        When absent (legacy merge TSVs), the original BSJ-key
+                        lookup behaviour is preserved.
+
     Returns:
-        isoform_confidence : int  — number of tools with isoform support
-        bsj_score          : int  — percentage-based score (1-4)
-        isoform_score      : int  — percentage-based, min 1 (1 tool always agrees with itself)
+        isoform_confidence : int  — number of tools supporting this specific structure
+        bsj_score          : int  — BSJ agreement score (1-4)
+        bsj_consensus      : str  — Low / Medium / High for BSJ detection
+        isoform_score      : int  — isoform structure agreement score (1-4, min 1)
+        isoform_consensus  : str  — Low / Medium / High for exon structure
         overlap_score      : int  — 1-4 based on avg pairwise fraction, 1 if no pairs
-        final_score        : int  — sum of three components (3-12)
-        tool_consensus     : str  — Low / Medium / High
         pair_fracs         : dict — { (tool_a, tool_b): (frac_a, frac_b) or (None, None) }
     """
     detected = {tool for tool, flag in tool_flags.items() if flag == "1"}
 
-    # ── isoform_confidence ─────────────────────────────────────────────────
-    tools_with_isoform = set()
-    all_pair_fracs     = []   # collect all individual fracs for avg
+    pair_fracs     = {}
+    all_pair_fracs = []
 
-    pair_fracs = {}
     for (tool_a, tool_b), (overlapping_a, overlapping_b, fractions) in all_pair_results.items():
         if tool_a not in detected or tool_b not in detected:
             pair_fracs[(tool_a, tool_b)] = (None, None)
@@ -208,36 +229,48 @@ def compute_scores(bsj_id, bsj_confidence, tool_flags, all_pair_results, n_activ
 
         pair_fracs[(tool_a, tool_b)] = (frac_a, frac_b)
 
-        if bsj_id in overlapping_a or bsj_id in overlapping_b:
-            tools_with_isoform.add(tool_a)
-            tools_with_isoform.add(tool_b)
+        # When isoform_tools_set is given, only count overlap fracs for pairs
+        # where both tools support THIS specific isoform structure.
+        if isoform_tools_set is not None:
+            if tool_a in isoform_tools_set and tool_b in isoform_tools_set:
+                if frac_a is not None:
+                    all_pair_fracs.extend([frac_a, frac_b])
+        else:
+            # legacy path: accumulate all fracs as before
+            if frac_a is not None:
+                all_pair_fracs.extend([frac_a, frac_b])
 
-        if frac_a is not None:
-            all_pair_fracs.extend([frac_a, frac_b])
+    # ── isoform_confidence ────────────────────────────────────────────────
+    if isoform_tools_set is not None:
+        # Use the isoform_tools column directly: it records which tools produced
+        # this exact exon structure, so it IS the per-isoform agreement count.
+        isoform_confidence = len(isoform_tools_set)
+    else:
+        # Legacy path: derive from pairwise BSJ-key overlaps
+        tools_with_isoform = set()
+        for (tool_a, tool_b), (overlapping_a, overlapping_b, _) in all_pair_results.items():
+            if bsj_id in overlapping_a or bsj_id in overlapping_b:
+                tools_with_isoform.add(tool_a)
+                tools_with_isoform.add(tool_b)
+        isoform_confidence = len(tools_with_isoform)
 
-    isoform_confidence = len(tools_with_isoform)
+    # ── component 1: bsj_score / bsj_consensus ───────────────────────────
+    bsj_score     = count_to_score(bsj_confidence, n_active)
+    bsj_consensus = score_to_cat(bsj_score)
 
-    # ── component 1: bsj_score ────────────────────────────────────────────
-    # percentage of active tools detecting this BSJ, binned 1-4
-    bsj_score = count_to_score(bsj_confidence, n_active)
-
-    # ── component 2: isoform_score ────────────────────────────────────────
-    # percentage of active tools with isoform support, binned 1-4, minimum 1
-    isoform_score = max(1, count_to_score(isoform_confidence, n_active))
+    # ── component 2: isoform_score / isoform_consensus ───────────────────
+    isoform_score     = max(1, count_to_score(isoform_confidence, n_active))
+    isoform_consensus = score_to_cat(isoform_score)
 
     # ── component 3: overlap_score ────────────────────────────────────────
-    # 1 if no pairs (single tool or no overlaps found)
     if all_pair_fracs:
         avg_frac      = sum(all_pair_fracs) / len(all_pair_fracs)
         overlap_score = frac_to_overlap_score(avg_frac)
     else:
         overlap_score = 1
 
-    final_score    = bsj_score + isoform_score + overlap_score
-    tool_consensus = final_score_to_cat(final_score)
-
-    return (isoform_confidence, bsj_score, isoform_score,
-            overlap_score, final_score, tool_consensus, pair_fracs)
+    return (isoform_confidence, bsj_score, bsj_consensus,
+            isoform_score, isoform_consensus, overlap_score, pair_fracs)
 
 
 def main():
@@ -259,8 +292,9 @@ def main():
     out_lines = []
 
     with open(args.confidence) as fh:
-        header    = None
-        tool_cols = []
+        header           = None
+        tool_cols        = []
+        iso_tools_idx    = None   # index of 'isoform_tools' column, if present
 
         for lineno, line in enumerate(fh, 1):
             line = line.rstrip("\n")
@@ -275,6 +309,10 @@ def main():
                                 if not c.endswith("_block_sizes")
                                 and not c.endswith("_block_starts")]
 
+                # 'isoform_tools' is present in smart_merge TSVs; use it for
+                # per-isoform structure agreement scoring.
+                iso_tools_idx = header.index("isoform_tools") if "isoform_tools" in header else None
+
                 pair_frac_cols = []
                 for tool_a, tool_b in pair_order:
                     pair_frac_cols.append("{}_vs_{}_frac_{}".format(tool_a, tool_b, tool_a))
@@ -282,8 +320,9 @@ def main():
 
                 new_header = (line + "\t" +
                     "\t".join(pair_frac_cols +
-                              ["bsj_score", "isoform_score", "overlap_score",
-                               "final_score", "tool_consensus"]))
+                              ["bsj_score", "bsj_consensus",
+                               "isoform_score", "isoform_consensus",
+                               "overlap_score"]))
                 out_lines.append(new_header)
                 continue
 
@@ -292,12 +331,26 @@ def main():
 
             cols           = line.split("\t")
             bsj_id         = cols[4]
+            # For smart_merge isoform entries (e.g. chr:100-200:+|iso1), strip
+            # the suffix before looking up in pairwise overlap files, which are
+            # keyed on plain BSJ coordinates.
+            lookup_id      = bsj_id.split('|')[0] if args.strip_isoform_suffix else bsj_id
             bsj_confidence = int(cols[bsj_conf_idx])
             tool_flags     = {tool: cols[header.index(tool)] for tool in tool_cols}
 
-            (isoform_confidence, bsj_score, isoform_score,
-             overlap_score, final_score, tool_consensus, pair_fracs) = compute_scores(
-                bsj_id, bsj_confidence, tool_flags, all_pair_results, args.n_active)
+            # When 'isoform_tools' is present, use it for per-isoform scoring so
+            # that minority isoforms (fewer supporting tools) score lower than the
+            # consensus isoform at the same BSJ.
+            isoform_tools_set = None
+            if iso_tools_idx is not None:
+                raw = cols[iso_tools_idx].strip()
+                if raw and raw != '.':
+                    isoform_tools_set = set(raw.split(','))
+
+            (isoform_confidence, bsj_score, bsj_consensus,
+             isoform_score, isoform_consensus, overlap_score, pair_fracs) = compute_scores(
+                lookup_id, bsj_confidence, tool_flags, all_pair_results, args.n_active,
+                isoform_tools_set=isoform_tools_set)
 
             cols[iso_conf_idx] = str(isoform_confidence)
 
@@ -310,8 +363,9 @@ def main():
             out_lines.append(
                 "\t".join(cols) + "\t" +
                 "\t".join(frac_values + [
-                    str(bsj_score), str(isoform_score),
-                    str(overlap_score), str(final_score), tool_consensus
+                    str(bsj_score), bsj_consensus,
+                    str(isoform_score), isoform_consensus,
+                    str(overlap_score)
                 ])
             )
 

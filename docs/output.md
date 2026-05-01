@@ -11,7 +11,7 @@ The pipeline processes long-read nanopore FASTQ files through the following step
 1. **Quality control** — FastQC and NanoPlot assess read quality
 2. **circRNA detection** — up to four tools run in parallel (isoCirc, CircFL-seq, CIRI-long, circnick-lrs)
 3. **BED12 conversion** — each tool's output is converted to a unified BED12 format
-4. **Merging & confidence scoring** — when two or more tools are active, results are merged and scored
+4. **Merging & confidence scoring** — when two or more tools are active, results are merged using the hybrid smart-merge algorithm and scored on two independent confidence axes
 5. **MultiQC** — aggregated QC report
 
 ---
@@ -128,7 +128,7 @@ All tool outputs are converted to a 12-column BED format (BED12) for downstream 
 
 ## Merged outputs
 
-Merging is performed when **two or more** detection tools are active. Two merge strategies are applied: BSJ-based (strict and relaxed) and exon-based.
+Merging is performed when **two or more** detection tools are active. All tools are first grouped by relaxed BSJ coordinates (within `--circrna_bsj_tolerance` bp). Within each group, a merge algorithm selects the representative BSJ and exon structure. The result is confidence-scored on two independent axes and optionally filtered before publication.
 
 ### Pairwise comparisons
 
@@ -142,88 +142,116 @@ Merging is performed when **two or more** detection tools are active. Two merge 
 
 All pairwise combinations of active tools are compared using `bedtools intersect -split -wo` to identify shared circRNA isoforms.
 
-### BSJ-based merge (strict and relaxed)
+### Merge algorithms
+
+All tools within a relaxed-BSJ group (coordinates within `--circrna_bsj_tolerance` bp) are treated as candidates for the same circRNA. A merge algorithm selects the representative BSJ and exon structure from those candidates.
+
+**BSJ selection** (all modes except `priority`): majority vote across all tools; ties broken by tool priority CIRI-long > CircFL-seq > IsoCirc > CircNick-LRS.
+
+**Structure selection** differs between modes and is described in the tables below.
+
+#### Default merge mode
+
+The pipeline uses `consensus_hybrid` as its merge algorithm.
+
+| Property | `consensus_hybrid` |
+| -------- | ------------------ |
+| BSJ | Majority vote across all tools |
+| Structure vote participants | Tools sharing the **exact winning BSJ** only |
+| Coordinate comparison | Absolute genomic coords (boundaries within `--circrna_bsj_tolerance` bp) |
+| Rebasing of minority-BSJ tools | **No** — tools with a different BSJ do not contribute to the structure vote |
+| Minority-BSJ tool handling | Emitted as separate isoform entries at their own BSJ coordinates |
+| Structure tie-break priority | IsoCirc > CIRI-long > CircNick-LRS > CircFL-seq |
+
+This design selects the most-supported exon structure among tools that agree on the BSJ, without shifting coordinates from tools that landed at a slightly different junction. Minority-BSJ isoforms are preserved in the output rather than silently discarded.
+
+#### Default output files
 
 <details markdown="1">
 <summary>Output files</summary>
 
-- `circrna/<sample>/merged/strict/`
-  - `<sample>_strict_union.bed12` — All circRNAs detected by any tool (exact BSJ match)
-  - `<sample>_strict_union_confidence.tsv` — Confidence table for union
-  - `<sample>_strict_intersection.bed12` — circRNAs detected by all active tools
-  - `<sample>_strict_intersection_confidence.tsv` — Confidence table for intersection
-
-- `circrna/<sample>/merged/relaxed/`
-  - `<sample>_relaxed_union.bed12` — Union with ±`circrna_bsj_tolerance` bp BSJ tolerance
-  - `<sample>_relaxed_union_confidence.tsv`
-  - `<sample>_relaxed_intersection.bed12`
-  - `<sample>_relaxed_intersection_confidence.tsv`
+- `circrna/<sample>/merged/smart/`
+  - `<sample>_discovery.bed12` — hybrid, unfiltered (maximum recall)
+  - `<sample>_discovery_confidence.tsv`
+  - `<sample>_balanced.bed12` — hybrid + no_low filter (best F1)
+  - `<sample>_balanced_confidence.tsv`
+  - `<sample>_high_confidence.bed12` — hybrid + high_only filter (best precision)
+  - `<sample>_high_confidence_confidence.tsv`
 
 </details>
 
-**Strict mode** groups circRNAs by exact back-splice junction (chrom, start, end, strand).
-**Relaxed mode** groups circRNAs whose BSJ coordinates differ by at most `--circrna_bsj_tolerance` bp (default: 5 bp) on each end.
+Three confidence-filtered outputs are published by default. After merging, each entry is scored on two independent confidence axes (`bsj_consensus` and `isoform_consensus`, each Low / Medium / High) and one of three filters is applied:
 
-### Exon-based merge
+| Output | Filter | Rule | Axes retained |
+| ------ | ------ | ---- | ------------- |
+| **`discovery`** | none | Keep all entries | any |
+| **`balanced`** | `no_low` | Drop entries where either axis is Low | ≥ Medium on both |
+| **`high_confidence`** | `high_only` | Keep only entries where both axes are High | High on both |
 
-<details markdown="1">
-<summary>Output files</summary>
+#### Additional merge modes (`--run_benchmark_modes`)
 
-- `circrna/<sample>/merged/exon_based/`
-  - `<sample>_exon_union.bed12`
-  - `<sample>_exon_union_confidence.tsv`
-  - `<sample>_exon_intersection.bed12`
-  - `<sample>_exon_intersection_confidence.tsv`
+Three further algorithms are available for research and benchmarking. All were outperformed by `consensus_hybrid` in benchmark evaluation and are not published by default.
 
-</details>
+| Mode | BSJ selection | Structure vote participants | Minority-BSJ rebasing | Minority-BSJ handling |
+| ---- | ------------- | -------------------------- | --------------------- | --------------------- |
+| `consensus` | Majority vote | Exact-BSJ tools only | No | Separate isoforms at own coords |
+| `consensus_xstruct` | Majority vote | All tools in group | **Yes** — shifted to winning BSJ | Folded into structure vote |
+| `priority` | Highest-priority tool | Highest-priority tool | No | Separate isoforms at own coords |
 
-Groups circRNAs by exon structure similarity (spliced-length overlap ≥ `--circrna_isoform_overlap`, default: 0.95) using a union-find algorithm on pairwise bedtools overlap data. circRNAs with the same BSJ but different isoforms may be grouped differently than in the BSJ-based merge.
+Key differences from `consensus_hybrid`:
+
+- **`consensus`** uses string equality for structure comparison rather than coordinate similarity — two tools reporting the same exon structure with a 1 bp boundary difference are treated as distinct isoforms.
+- **`consensus_xstruct`** includes minority-BSJ tools in the structure vote by rebasing their exon coordinates to the winning BSJ. This can incorporate more structural information but may introduce coordinate imprecision when BSJ offset is non-trivial.
+- **`priority`** skips voting entirely — BSJ and structure come unconditionally from the single highest-priority tool present.
+
+With `--run_benchmark_modes`, all three additional algorithms are published with four filter variants each (unfiltered, `no_low`, `trusted_only`, `high_only`).
+
+The `trusted_only` filter is only available in benchmark mode:
+
+| Filter | Rule |
+| ------ | ---- |
+| `trusted_only` | Drop Low-confidence entries unless the source tool is CIRI-long or IsoCirc |
 
 ### Confidence TSV format
 
-All `*_confidence.tsv` files share a common format:
+All `*_confidence.tsv` files share a common format. Confidence is assessed on two **independent axes**:
 
-| Column              | Description                                                                 |
-| ------------------- | --------------------------------------------------------------------------- |
-| `#chrom`            | Chromosome                                                                  |
-| `start`             | BSJ start (0-based)                                                         |
-| `end`               | BSJ end                                                                     |
-| `strand`            | Strand (`+` or `-`)                                                         |
-| `bsj_id`            | Unique BSJ identifier: `chrom:start-end:strand`                             |
-| `bsj_confidence`    | Number of tools detecting this BSJ (1–4)                                    |
-| `<tool>`            | Per-tool presence flag: `1` if detected, `0` if not (one column per tool)  |
-| `<tool>_block_sizes`| BED12 block sizes from this tool's call                                     |
-| `<tool>_block_starts`| BED12 block starts from this tool's call                                   |
-| `isoform_confidence`| Number of tools with confirmed isoform overlap                              |
-| `bsj_score`         | Percentage of active tools detecting this BSJ, binned 1–4                  |
-| `isoform_score`     | Percentage of active tools with isoform support, binned 1–4, minimum 1     |
-| `overlap_score`     | Average pairwise spliced-length overlap fraction, binned 1–4               |
-| `final_score`       | Sum of three scores (3–12)                                                  |
-| `tool_consensus`    | Consensus category: `Low` (3–4), `Medium` (5–8), `High` (9–12)            |
+- **`bsj_consensus`** — quality of BSJ detection: what fraction of active tools agreed on this back-splice junction?
+- **`isoform_consensus`** — quality of exon-structure agreement: how well do tools agree on the exon boundaries of this isoform?
 
-**Percentage-based scoring bins (for bsj_score and isoform_score):**
+Each axis is scored independently (1=Low, 2–3=Medium, 4=High based on binned percentage of tools) allowing a circRNA to have a well-supported BSJ but uncertain isoform structure, or vice versa.
 
-| % of active tools | Score |
-| ----------------- | ----- |
-| ≤ 25%             | 1     |
-| ≤ 50%             | 2     |
-| ≤ 75%             | 3     |
-| > 75%             | 4     |
+| Column               | Description                                                                 |
+| -------------------- | --------------------------------------------------------------------------- |
+| `#chrom`             | Chromosome                                                                  |
+| `start`              | BSJ start (0-based)                                                         |
+| `end`                | BSJ end                                                                     |
+| `strand`             | Strand (`+` or `-`)                                                         |
+| `bsj_id`             | Unique identifier: `chrom:start-end:strand` (isoforms suffixed `\|iso*`)   |
+| `bsj_confidence`     | Number of tools detecting this BSJ (1–4)                                    |
+| `<tool>`             | Per-tool presence flag: `1` if detected, `0` if not (one column per tool)  |
+| `<tool>_block_sizes` | BED12 block sizes from this tool's call                                     |
+| `<tool>_block_starts`| BED12 block starts from this tool's call                                    |
+| `isoform_confidence` | Number of tools with confirmed isoform overlap                              |
+| `bsj_score`          | Percentage of active tools detecting this BSJ, binned 1–4                  |
+| `isoform_score`      | Percentage of active tools with isoform support, binned 1–4 (min 1)        |
+| `overlap_score`      | Average pairwise spliced-length overlap fraction, binned 1–4               |
+| `bsj_consensus`      | BSJ confidence label: `Low` (score 1), `Medium` (2–3), `High` (4)         |
+| `isoform_consensus`  | Isoform confidence label: `Low` (score 1), `Medium` (2–3), `High` (4)     |
 
-**Final score categories:**
+**Scoring bins (percentage of active tools):**
 
-| Score range | Category |
-| ----------- | -------- |
-| 3–4         | Low      |
-| 5–8         | Medium   |
-| 9–12        | High     |
+| % of active tools | Score | Consensus |
+| ----------------- | ----- | --------- |
+| ≤ 25%             | 1     | Low       |
+| ≤ 50%             | 2     | Medium    |
+| ≤ 75%             | 3     | Medium    |
+| > 75%             | 4     | High      |
 
 > [!NOTE]
-> `tool_consensus` always reflects agreement among the tools that were actually run.
+> Consensus labels always reflect agreement among the tools that were actually run.
 > A `High` from 2 tools means both tools agreed — it is not mathematically equivalent
 > to `High` from 4 tools. The pipeline emits a warning when fewer than 4 tools are active.
-
-A circRNA detected by all active tools with confirmed isoform overlap will receive a `High` consensus score. A circRNA detected by only one tool, or a minority of tools, will receive `Low`.
 
 ---
 

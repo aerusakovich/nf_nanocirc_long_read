@@ -15,6 +15,16 @@ include { CIRCNICK_TO_BED12      } from '../../modules/local/circnick_to_bed12'
 include { CIRCRNA_BEDTOOLS_PAIRS } from '../../modules/local/circrna_bedtools_pairs'
 include { CIRCRNA_MERGE          } from '../../modules/local/circrna_merge'
 include { CIRCRNA_EXON_MERGE     } from '../../modules/local/circrna_exon_merge'
+include { CIRCRNA_SMART_MERGE    } from '../../modules/local/circrna_smart_merge'
+include { CIRCRNA_CONFIDENCE_FILTER as CIRCRNA_FILTER_BALANCED           } from '../../modules/local/circrna_confidence_filter'
+include { CIRCRNA_CONFIDENCE_FILTER as CIRCRNA_FILTER_HIGH_CONFIDENCE    } from '../../modules/local/circrna_confidence_filter'
+include { CIRCRNA_CONFIDENCE_FILTER as CIRCRNA_FILTER_CONSENSUS_NO_LOW   } from '../../modules/local/circrna_confidence_filter'
+include { CIRCRNA_CONFIDENCE_FILTER as CIRCRNA_FILTER_CONSENSUS_TRUSTED  } from '../../modules/local/circrna_confidence_filter'
+include { CIRCRNA_CONFIDENCE_FILTER as CIRCRNA_FILTER_XSTRUCT_NO_LOW     } from '../../modules/local/circrna_confidence_filter'
+include { CIRCRNA_CONFIDENCE_FILTER as CIRCRNA_FILTER_XSTRUCT_TRUSTED    } from '../../modules/local/circrna_confidence_filter'
+include { CIRCRNA_CONFIDENCE_FILTER as CIRCRNA_FILTER_PRIORITY_NO_LOW    } from '../../modules/local/circrna_confidence_filter'
+include { CIRCRNA_CONFIDENCE_FILTER as CIRCRNA_FILTER_PRIORITY_TRUSTED   } from '../../modules/local/circrna_confidence_filter'
+include { CIRCRNA_ANNOTATE       } from './circrna_annotate'
 
 workflow CIRCRNA_ANALYSIS {
 
@@ -27,8 +37,6 @@ workflow CIRCRNA_ANALYSIS {
     main:
 
     ch_versions = channel.empty()
-
-    // ── STEP 1: run active tools ───────────────────────────────────────────
 
     // isocirc
     ch_isocirc_bed = channel.empty()
@@ -98,7 +106,6 @@ workflow CIRCRNA_ANALYSIS {
         ch_versions     = ch_versions.mix(CIRCNICK_TO_BED12.out.versions.first())
     }
 
-    // ── STEP 2: collect active BED12s ─────────────────────────────────────
     ch_all_beds = channel.empty()
 
     if (params.run_isocirc) {
@@ -122,14 +129,13 @@ workflow CIRCRNA_ANALYSIS {
         )
     }
 
-    // group by sample: [ meta, [tool_names], [bed_files] ]
+    // Group by sample: [ meta, [tool_names], [bed_files] ]
     ch_beds_collected = ch_all_beds
         .groupTuple()
         .map { meta, tool_names, bed_files ->
             [ meta, tool_names, bed_files ]
         }
 
-    // ── STEP 3: run merge pipeline only when 2+ tools active ──────────────
     ch_n_active = params.run_isocirc  ? 1 : 0
     ch_n_active = params.run_circfl   ? ch_n_active + 1 : ch_n_active
     ch_n_active = params.run_cirilong ? ch_n_active + 1 : ch_n_active
@@ -152,38 +158,118 @@ workflow CIRCRNA_ANALYSIS {
         ch_for_merge = ch_beds_collected
             .join(CIRCRNA_BEDTOOLS_PAIRS.out.pairs, by: 0)
 
-        CIRCRNA_MERGE (
+        // Legacy merge modes (--run_benchmark_modes)
+        if (params.run_benchmark_modes) {
+            CIRCRNA_MERGE (
+                ch_for_merge.map { meta, tool_names, bed_files, pairs -> [ meta, tool_names, bed_files ] },
+                ch_for_merge.map { meta, tool_names, bed_files, pairs -> [ meta, pairs ] },
+                ch_n_active
+            )
+            ch_versions = ch_versions.mix(CIRCRNA_MERGE.out.versions.first())
+
+            CIRCRNA_EXON_MERGE (
+                CIRCRNA_BEDTOOLS_PAIRS.out.pairs,
+                ch_n_active
+            )
+            ch_versions = ch_versions.mix(CIRCRNA_EXON_MERGE.out.versions.first())
+        }
+
+        CIRCRNA_SMART_MERGE (
             ch_for_merge.map { meta, tool_names, bed_files, pairs -> [ meta, tool_names, bed_files ] },
             ch_for_merge.map { meta, tool_names, bed_files, pairs -> [ meta, pairs ] },
             ch_n_active
         )
-        ch_versions = ch_versions.mix(CIRCRNA_MERGE.out.versions.first())
+        ch_versions = ch_versions.mix(CIRCRNA_SMART_MERGE.out.versions.first())
 
-        CIRCRNA_EXON_MERGE (
-            CIRCRNA_BEDTOOLS_PAIRS.out.pairs,
-            ch_n_active
-        )
-        ch_versions = ch_versions.mix(CIRCRNA_EXON_MERGE.out.versions.first())
+        // Build per-mode filter input channels — both use hybrid as input
+        ch_hybrid = CIRCRNA_SMART_MERGE.out.hybrid_bed
+            .join(CIRCRNA_SMART_MERGE.out.hybrid_conf, by: 0)
+
+        ch_for_balanced        = ch_hybrid.map { meta, bed, tsv -> [ meta + [category: 'hybrid'], bed, tsv ] }
+        ch_for_high_confidence = ch_hybrid.map { meta, bed, tsv -> [ meta + [category: 'hybrid'], bed, tsv ] }
+
+        CIRCRNA_FILTER_BALANCED        ( ch_for_balanced )
+        CIRCRNA_FILTER_HIGH_CONFIDENCE ( ch_for_high_confidence )
+        ch_versions = ch_versions.mix(CIRCRNA_FILTER_BALANCED.out.versions.first())
+
+        if (params.run_benchmark_modes) {
+            ch_consensus = CIRCRNA_SMART_MERGE.out.consensus_bed
+                .join(CIRCRNA_SMART_MERGE.out.consensus_conf, by: 0)
+
+            ch_xstruct = CIRCRNA_SMART_MERGE.out.consensus_xstruct_bed
+                .join(CIRCRNA_SMART_MERGE.out.consensus_xstruct_conf, by: 0)
+
+            ch_for_priority = CIRCRNA_SMART_MERGE.out.priority_bed
+                .join(CIRCRNA_SMART_MERGE.out.priority_conf, by: 0)
+
+            CIRCRNA_FILTER_CONSENSUS_NO_LOW  ( ch_consensus.map { meta, bed, tsv -> [ meta + [category: 'smart_consensus_no_low'],      bed, tsv ] } )
+            CIRCRNA_FILTER_CONSENSUS_TRUSTED ( ch_consensus.map { meta, bed, tsv -> [ meta + [category: 'smart_consensus_filtered'],    bed, tsv ] } )
+            CIRCRNA_FILTER_XSTRUCT_NO_LOW    ( ch_xstruct.map   { meta, bed, tsv -> [ meta + [category: 'smart_consensus_xstruct_no_low'],  bed, tsv ] } )
+            CIRCRNA_FILTER_XSTRUCT_TRUSTED   ( ch_xstruct.map   { meta, bed, tsv -> [ meta + [category: 'smart_consensus_xstruct_filtered'], bed, tsv ] } )
+            CIRCRNA_FILTER_PRIORITY_NO_LOW   ( ch_for_priority.map { meta, bed, tsv -> [ meta + [category: 'smart_priority_no_low'],    bed, tsv ] } )
+            CIRCRNA_FILTER_PRIORITY_TRUSTED  ( ch_for_priority.map { meta, bed, tsv -> [ meta + [category: 'smart_priority_filtered'],  bed, tsv ] } )
+        }
+
+        // Discovery is hybrid emitted directly (no filter applied)
+        ch_discovery_for_annotate = ch_hybrid
+            .map { meta, bed, tsv -> [ meta + [category: 'discovery'], bed, tsv ] }
+
+        if (!params.skip_annotation) {
+
+            ch_for_annotate = ch_discovery_for_annotate
+                .mix( CIRCRNA_FILTER_BALANCED.out.bed       .join(CIRCRNA_FILTER_BALANCED.out.conf,        by: 0).map { meta, bed, tsv -> [ meta + [category: 'balanced'],        bed, tsv ] } )
+                .mix( CIRCRNA_FILTER_HIGH_CONFIDENCE.out.bed.join(CIRCRNA_FILTER_HIGH_CONFIDENCE.out.conf, by: 0).map { meta, bed, tsv -> [ meta + [category: 'high_confidence'], bed, tsv ] } )
+
+            if (params.run_benchmark_modes) {
+                ch_for_annotate = ch_for_annotate
+                    .mix( CIRCRNA_MERGE.out.strict_union_bed  .join(CIRCRNA_MERGE.out.strict_union_conf,  by: 0).map { meta, bed, tsv -> [ meta + [category: 'strict_union'],  bed, tsv ] } )
+                    .mix( CIRCRNA_MERGE.out.strict_inter_bed  .join(CIRCRNA_MERGE.out.strict_inter_conf,  by: 0).map { meta, bed, tsv -> [ meta + [category: 'strict_inter'],  bed, tsv ] } )
+                    .mix( CIRCRNA_MERGE.out.relaxed_union_bed .join(CIRCRNA_MERGE.out.relaxed_union_conf, by: 0).map { meta, bed, tsv -> [ meta + [category: 'relaxed_union'], bed, tsv ] } )
+                    .mix( CIRCRNA_MERGE.out.relaxed_inter_bed .join(CIRCRNA_MERGE.out.relaxed_inter_conf, by: 0).map { meta, bed, tsv -> [ meta + [category: 'relaxed_inter'], bed, tsv ] } )
+                    .mix( CIRCRNA_EXON_MERGE.out.exon_union_bed.join(CIRCRNA_EXON_MERGE.out.exon_union_conf, by: 0).map { meta, bed, tsv -> [ meta + [category: 'exon_union'], bed, tsv ] } )
+                    .mix( CIRCRNA_EXON_MERGE.out.exon_inter_bed.join(CIRCRNA_EXON_MERGE.out.exon_inter_conf, by: 0).map { meta, bed, tsv -> [ meta + [category: 'exon_inter'], bed, tsv ] } )
+            }
+
+            CIRCRNA_ANNOTATE(ch_for_annotate, fasta, gtf)
+            // CIRCRNA_ANNOTATE uses nf-core modules with `topic: versions` —
+            // versions are collected automatically; no ch_versions mixing needed.
+        }
     }
 
     emit:
+    // Per-tool BED12 outputs (always present when tool is active)
     isocirc_bed12   = ch_isocirc_bed
     circfl_bed12    = ch_circfl_bed
     cirilong_bed12  = ch_cirilong_bed
     circnick_bed12  = ch_circnick_bed
 
-    strict_union_bed    = ch_n_active >= 2 ? CIRCRNA_MERGE.out.strict_union_bed    : channel.empty()
-    strict_union_conf   = ch_n_active >= 2 ? CIRCRNA_MERGE.out.strict_union_conf   : channel.empty()
-    strict_inter_bed    = ch_n_active >= 2 ? CIRCRNA_MERGE.out.strict_inter_bed    : channel.empty()
-    strict_inter_conf   = ch_n_active >= 2 ? CIRCRNA_MERGE.out.strict_inter_conf   : channel.empty()
-    relaxed_union_bed   = ch_n_active >= 2 ? CIRCRNA_MERGE.out.relaxed_union_bed   : channel.empty()
-    relaxed_union_conf  = ch_n_active >= 2 ? CIRCRNA_MERGE.out.relaxed_union_conf  : channel.empty()
-    relaxed_inter_bed   = ch_n_active >= 2 ? CIRCRNA_MERGE.out.relaxed_inter_bed   : channel.empty()
-    relaxed_inter_conf  = ch_n_active >= 2 ? CIRCRNA_MERGE.out.relaxed_inter_conf  : channel.empty()
-    exon_union_bed      = ch_n_active >= 2 ? CIRCRNA_EXON_MERGE.out.exon_union_bed  : channel.empty()
-    exon_union_conf     = ch_n_active >= 2 ? CIRCRNA_EXON_MERGE.out.exon_union_conf : channel.empty()
-    exon_inter_bed      = ch_n_active >= 2 ? CIRCRNA_EXON_MERGE.out.exon_inter_bed  : channel.empty()
-    exon_inter_conf     = ch_n_active >= 2 ? CIRCRNA_EXON_MERGE.out.exon_inter_conf : channel.empty()
+    // Discovery: hybrid, all isoforms, unfiltered
+    discovery_bed  = ch_n_active >= 2 ? CIRCRNA_SMART_MERGE.out.hybrid_bed  : channel.empty()
+    discovery_conf = ch_n_active >= 2 ? CIRCRNA_SMART_MERGE.out.hybrid_conf : channel.empty()
+    // Balanced: hybrid + no_low filter
+    balanced_bed   = ch_n_active >= 2 ? CIRCRNA_FILTER_BALANCED.out.bed        : channel.empty()
+    balanced_conf  = ch_n_active >= 2 ? CIRCRNA_FILTER_BALANCED.out.conf       : channel.empty()
+    // High-confidence: hybrid + high_only filter
+    high_conf_bed  = ch_n_active >= 2 ? CIRCRNA_FILTER_HIGH_CONFIDENCE.out.bed  : channel.empty()
+    high_conf_conf = ch_n_active >= 2 ? CIRCRNA_FILTER_HIGH_CONFIDENCE.out.conf : channel.empty()
+
+    // Legacy merge modes (--run_benchmark_modes)
+    strict_union_bed    = (ch_n_active >= 2 && params.run_benchmark_modes) ? CIRCRNA_MERGE.out.strict_union_bed    : channel.empty()
+    strict_union_conf   = (ch_n_active >= 2 && params.run_benchmark_modes) ? CIRCRNA_MERGE.out.strict_union_conf   : channel.empty()
+    strict_inter_bed    = (ch_n_active >= 2 && params.run_benchmark_modes) ? CIRCRNA_MERGE.out.strict_inter_bed    : channel.empty()
+    strict_inter_conf   = (ch_n_active >= 2 && params.run_benchmark_modes) ? CIRCRNA_MERGE.out.strict_inter_conf   : channel.empty()
+    relaxed_union_bed   = (ch_n_active >= 2 && params.run_benchmark_modes) ? CIRCRNA_MERGE.out.relaxed_union_bed   : channel.empty()
+    relaxed_union_conf  = (ch_n_active >= 2 && params.run_benchmark_modes) ? CIRCRNA_MERGE.out.relaxed_union_conf  : channel.empty()
+    relaxed_inter_bed   = (ch_n_active >= 2 && params.run_benchmark_modes) ? CIRCRNA_MERGE.out.relaxed_inter_bed   : channel.empty()
+    relaxed_inter_conf  = (ch_n_active >= 2 && params.run_benchmark_modes) ? CIRCRNA_MERGE.out.relaxed_inter_conf  : channel.empty()
+    exon_union_bed      = (ch_n_active >= 2 && params.run_benchmark_modes) ? CIRCRNA_EXON_MERGE.out.exon_union_bed  : channel.empty()
+    exon_union_conf     = (ch_n_active >= 2 && params.run_benchmark_modes) ? CIRCRNA_EXON_MERGE.out.exon_union_conf : channel.empty()
+    exon_inter_bed      = (ch_n_active >= 2 && params.run_benchmark_modes) ? CIRCRNA_EXON_MERGE.out.exon_inter_bed  : channel.empty()
+    exon_inter_conf     = (ch_n_active >= 2 && params.run_benchmark_modes) ? CIRCRNA_EXON_MERGE.out.exon_inter_conf : channel.empty()
+
+    annotated_gff = (!params.skip_annotation && ch_n_active >= 2) ? CIRCRNA_ANNOTATE.out.annotated_gff : channel.empty()
+    spliced_fasta = (!params.skip_annotation && ch_n_active >= 2) ? CIRCRNA_ANNOTATE.out.spliced_fasta : channel.empty()
+    annotated_tsv = (!params.skip_annotation && ch_n_active >= 2) ? CIRCRNA_ANNOTATE.out.annotated_tsv : channel.empty()
 
     versions = ch_versions
 }

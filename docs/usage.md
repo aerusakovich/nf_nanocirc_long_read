@@ -124,31 +124,42 @@ By default all four tools are enabled. Disable individual tools with `false`:
 
 These options control how results from multiple tools are merged and scored:
 
-| Parameter                  | Description                                                              | Default |
-| -------------------------- | ------------------------------------------------------------------------ | ------- |
-| `--circrna_bsj_tolerance`  | Back-splice junction coordinate tolerance in bp for relaxed merge mode   | `5`     |
-| `--circrna_isoform_overlap`| Minimum reciprocal spliced-length overlap for isoform confidence scoring | `0.95`  |
+| Parameter                   | Description                                                              | Default |
+| --------------------------- | ------------------------------------------------------------------------ | ------- |
+| `--circrna_bsj_tolerance`   | BSJ coordinate tolerance in bp for relaxed BSJ grouping during merge    | `5`     |
+| `--circrna_isoform_overlap` | Minimum reciprocal spliced-length overlap for isoform confidence scoring | `0.95`  |
+| `--run_benchmark_modes`     | Also publish raw smart-merge variants and all filtered combinations (for research / benchmarking) | `false` |
 
 Merging is only performed when **two or more** detection tools are active.
 
-### Consensus scoring
+### Confidence scoring
 
-Each circRNA in the merged output receives a `tool_consensus` label (`Low`, `Medium`, or `High`) based on three percentage-based component scores:
+Each merged circRNA is scored on two **independent** confidence axes:
 
-- **bsj_score** — what fraction of active tools detected this back-splice junction?
-- **isoform_score** — what fraction of active tools confirmed a matching isoform structure?
-- **overlap_score** — what is the average pairwise spliced-length overlap across tool pairs?
+- **`bsj_consensus`** (`Low`/`Medium`/`High`) — what fraction of active tools agreed on this back-splice junction?
+- **`isoform_consensus`** (`Low`/`Medium`/`High`) — what fraction of active tools confirmed a matching exon structure?
 
-Each component is binned: ≤25% of tools → 1, ≤50% → 2, ≤75% → 3, >75% → 4. The final score (sum, 3–12) maps to:
+Each axis is scored by binning the relevant percentage of active tools:
 
-| Score | Category |
-| ----- | -------- |
-| 3–4   | Low      |
-| 5–8   | Medium   |
-| 9–12  | High     |
+| % of active tools | Score | Consensus |
+| ----------------- | ----- | --------- |
+| ≤ 25%             | 1     | Low       |
+| ≤ 50%             | 2     | Medium    |
+| ≤ 75%             | 3     | Medium    |
+| > 75%             | 4     | High      |
+
+The two axes are intentionally independent — a circRNA can have a well-supported BSJ (High `bsj_consensus`) but an uncertain isoform structure (Low `isoform_consensus`), or vice versa.
+
+The three merged output modes apply different filters to these axes:
+
+| Output            | Filter applied                             | Axes kept                    |
+| ----------------- | ------------------------------------------ | ---------------------------- |
+| `discovery`       | None                                       | All entries (maximum recall) |
+| `balanced`        | Remove Low on either axis (`no_low`)       | ≥ Medium on both axes        |
+| `high_confidence` | Require High on both axes (`high_only`)    | High on both axes only       |
 
 > [!WARNING]
-> **Fewer than 4 tools reduces scoring resolution.** The pipeline emits a warning when fewer than 4 tools are active. `tool_consensus` always reflects agreement among the tools that _ran_ — a `High` from 2 tools (both agree) is not the same statistical confidence as `High` from all 4 tools. See [scoring examples](#scoring-examples) below.
+> **Fewer than 4 tools reduces scoring resolution.** The pipeline emits a warning when fewer than 4 tools are active. Consensus labels always reflect agreement among the tools that _ran_ — a `High` from 2 tools (both agree) is not the same statistical confidence as `High` from all 4 tools. See [scoring examples](#scoring-examples) below.
 
 ### QC options
 
@@ -269,36 +280,35 @@ process {
 
 ## Scoring examples
 
-The tables below illustrate how `tool_consensus` is assigned under different run configurations. Scores are computed as **bsj_score + isoform_score + overlap_score**, where each component is binned 1–4 based on the percentage of active tools.
+The tables below illustrate how `bsj_consensus` and `isoform_consensus` are assigned under different run configurations. Each score is the binned percentage of active tools (≤25% → 1/Low, ≤50% → 2/Medium, ≤75% → 3/Medium, >75% → 4/High).
 
 ### 4-tool run
 
-| Scenario                                | BSJ tools   | Isoform tools | Avg overlap | bsj | iso | ovlp | total | Category |
-| --------------------------------------- | ----------- | ------------- | ----------- | --- | --- | ---- | ----- | -------- |
-| All 4 agree, full isoform match         | 4/4 (100%)  | 4/4 (100%)    | 90%         | 4   | 4   | 4    | **12** | High    |
-| 3 tools agree, good isoform             | 3/4 (75%)   | 3/4 (75%)     | 80%         | 3   | 3   | 4    | **10** | High    |
-| All 4 BSJ, but no isoform confirmation  | 4/4 (100%)  | 0/4 (0%)      | —           | 4   | 1   | 1    | **6**  | Medium  |
-| 2 tools agree, some isoform             | 2/4 (50%)   | 2/4 (50%)     | 60%         | 2   | 2   | 3    | **7**  | Medium  |
-| Only 1 tool detects this circRNA        | 1/4 (25%)   | 0/4 (0%)      | —           | 1   | 1   | 1    | **3**  | Low     |
+| Scenario                               | BSJ tools  | Isoform tools | bsj score | bsj_consensus | iso score | isoform_consensus |
+| -------------------------------------- | ---------- | ------------- | --------- | ------------- | --------- | ----------------- |
+| All 4 agree, full isoform match        | 4/4 (100%) | 4/4 (100%)    | 4         | **High**      | 4         | **High**          |
+| 3 tools agree, good isoform            | 3/4 (75%)  | 3/4 (75%)     | 3         | **Medium**    | 3         | **Medium**        |
+| All 4 BSJ, but no isoform confirmation | 4/4 (100%) | 0/4 (0%)      | 4         | **High**      | 1         | **Low**           |
+| 2 tools agree, no isoform              | 2/4 (50%)  | 0/4 (0%)      | 2         | **Medium**    | 1         | **Low**           |
+| Only 1 tool detects this circRNA       | 1/4 (25%)  | 0/4 (0%)      | 1         | **Low**       | 1         | **Low**           |
 
 ### 3-tool run
 
-| Scenario                                | BSJ tools   | Isoform tools | Avg overlap | bsj | iso | ovlp | total | Category |
-| --------------------------------------- | ----------- | ------------- | ----------- | --- | --- | ---- | ----- | -------- |
-| All 3 agree, full isoform match         | 3/3 (100%)  | 3/3 (100%)    | 90%         | 4   | 4   | 4    | **12** | High    |
-| 2 tools agree, good isoform             | 2/3 (67%)   | 2/3 (67%)     | 80%         | 3   | 3   | 4    | **10** | High    |
-| All 3 BSJ, but no isoform confirmation  | 3/3 (100%)  | 0/3 (0%)      | —           | 4   | 1   | 1    | **6**  | Medium  |
-| 2 tools, no isoform                     | 2/3 (67%)   | 0/3 (0%)      | —           | 3   | 1   | 1    | **5**  | Medium  |
-| Only 1 tool                             | 1/3 (33%)   | 0/3 (0%)      | —           | 2   | 1   | 1    | **4**  | Low     |
+| Scenario                               | BSJ tools  | Isoform tools | bsj score | bsj_consensus | iso score | isoform_consensus |
+| -------------------------------------- | ---------- | ------------- | --------- | ------------- | --------- | ----------------- |
+| All 3 agree, full isoform match        | 3/3 (100%) | 3/3 (100%)    | 4         | **High**      | 4         | **High**          |
+| 2 tools agree, good isoform            | 2/3 (67%)  | 2/3 (67%)     | 3         | **Medium**    | 3         | **Medium**        |
+| All 3 BSJ, but no isoform confirmation | 3/3 (100%) | 0/3 (0%)      | 4         | **High**      | 1         | **Low**           |
+| Only 1 tool                            | 1/3 (33%)  | 0/3 (0%)      | 2         | **Medium**    | 1         | **Low**           |
 
 ### 2-tool run
 
-| Scenario                                | BSJ tools   | Isoform tools | Avg overlap | bsj | iso | ovlp | total | Category |
-| --------------------------------------- | ----------- | ------------- | ----------- | --- | --- | ---- | ----- | -------- |
-| Both agree, full isoform match          | 2/2 (100%)  | 2/2 (100%)    | 90%         | 4   | 4   | 4    | **12** | High    |
-| Both agree, moderate isoform            | 2/2 (100%)  | 1/2 (50%)     | 55%         | 4   | 2   | 3    | **9**  | High    |
-| Both agree, no isoform                  | 2/2 (100%)  | 0/2 (0%)      | —           | 4   | 1   | 1    | **6**  | Medium  |
-| Only 1 tool detects                     | 1/2 (50%)   | 0/2 (0%)      | —           | 2   | 1   | 1    | **4**  | Low     |
+| Scenario                               | BSJ tools  | Isoform tools | bsj score | bsj_consensus | iso score | isoform_consensus |
+| -------------------------------------- | ---------- | ------------- | --------- | ------------- | --------- | ----------------- |
+| Both agree, full isoform match         | 2/2 (100%) | 2/2 (100%)    | 4         | **High**      | 4         | **High**          |
+| Both agree, moderate isoform           | 2/2 (100%) | 1/2 (50%)     | 4         | **High**      | 2         | **Medium**        |
+| Both agree, no isoform                 | 2/2 (100%) | 0/2 (0%)      | 4         | **High**      | 1         | **Low**           |
+| Only 1 tool detects                    | 1/2 (50%)  | 0/2 (0%)      | 2         | **Medium**    | 1         | **Low**           |
 
 > [!WARNING]
-> `High` from 2 tools means both tools agreed with matching isoforms. With 4 tools, the same label requires independent confirmation from at least 3 tools — a substantially stronger claim. Always consider the `bsj_confidence` column (raw tool count) alongside `tool_consensus`.
+> `High` from 2 tools means both tools agreed with matching isoforms. With 4 tools, the same label requires independent confirmation from at least 3 tools — a substantially stronger claim. Always consider the `bsj_confidence` column (raw tool count) alongside the consensus labels.

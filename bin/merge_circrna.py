@@ -206,9 +206,9 @@ def write_outputs(groups, active_tools, sample, mode, outdir):
             bsj_id,
             str(bsj_confidence),
             strand,
-            rep["thick_start"],
-            rep["thick_end"],
-            rep["rgb"],
+            str(start),         # thickStart = thickEnd = start → no CDS
+            str(start),         # thickEnd
+            "0",                # rgb
             rep["block_count"],
             rep["block_sizes"],
             rep["block_starts"],

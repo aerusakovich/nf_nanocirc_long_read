@@ -33,8 +33,8 @@ The pipeline runs the following steps:
    - [`circnick-lrs`](https://github.com/dzhang32/circnick)
 3. **BED12 conversion** - all tool outputs converted to a unified 12-column BED format
 4. **Pairwise comparison** - [`bedtools intersect`](https://bedtools.readthedocs.io/) across all tool pairs with --split for exon boundaries meeting user defined reciprocal overlap fraction (default 0.95)
-5. **Merging** — BSJ-based (strict and relaxed) and exon-based union/intersection
-6. **Confidence scoring** - each circRNA scored on BSJ support, isoform support, and spliced-length overlap
+5. **Hybrid smart merge** — BSJ majority vote across all tools + absolute-coordinate structure vote among exact-BSJ tools; produces three confidence-filtered outputs (discovery, balanced, high_confidence)
+6. **Confidence scoring** - each circRNA scored on two independent axes: BSJ consensus and isoform structure consensus (each Low/Medium/High)
 7. **MultiQC** - [`MultiQC`](https://multiqc.info/) aggregated QC report
 
 ## Quick start
@@ -86,6 +86,7 @@ For full parameter documentation see [docs/usage.md](docs/usage.md) or the [nf-c
 | `--circnick_liftover_chain` | UCSC chain file for coordinate liftover (optional, but required if provided version of genome differs from h19 or m38. otherwise circNICK-lrs results will be incomparable with other tools)        | —       |
 | `--circrna_bsj_tolerance`   | BSJ coordinate tolerance for relaxed merge (bp)           | `5`     |
 | `--circrna_isoform_overlap` | Min reciprocal spliced-length overlap for isoform scoring | `0.95`  |
+| `--run_benchmark_modes`     | Also publish raw smart-merge variants and all filtered combinations | `false` |
 
 ## Output
 
@@ -94,68 +95,41 @@ The main outputs are in `<outdir>/circrna/<sample>/`:
 ```
 circrna/
 └── <sample>/
-    ├── bed12/                     # Per-tool BED12 files
-    ├── isocirc/                   # isoCirc raw output
-    ├── circfl_seq/                # CircFL-seq raw output
-    ├── ciri_long/                 # CIRI-long raw output
-    ├── circnick_lrs/              # circnick-lrs raw output
+    ├── bed12/                          # Per-tool BED12 files
+    ├── isocirc/                        # isoCirc raw output
+    ├── circfl_seq/                     # CircFL-seq raw output
+    ├── ciri_long/                      # CIRI-long raw output
+    ├── circnick_lrs/                   # circnick-lrs raw output
     └── merged/
-        ├── pairs/                 # Pairwise bedtools comparisons
-        ├── strict/                # Strict BSJ-based union + intersection
-        ├── relaxed/               # Relaxed BSJ-based union + intersection
-        └── exon_based/            # Exon structure-based union + intersection
+        ├── pairs/                      # Pairwise bedtools comparisons
+        └── smart/                      # Hybrid smart-merge outputs
+            ├── <sample>_discovery.*    # All merged circRNAs (max recall)
+            ├── <sample>_balanced.*     # Low-confidence entries removed (best F1)
+            └── <sample>_high_confidence.*  # High/High on both axes only (best precision)
 ```
 
-Each merged directory contains BED12 files and confidence TSV files. The confidence TSV includes per-tool flags, isoform overlap fractions, and a `tool_consensus` score (Low / Medium / High).
+Each output consists of a BED12 file and a confidence TSV. The confidence TSV includes per-tool flags, isoform overlap fractions, and two independent consensus labels: `bsj_consensus` and `isoform_consensus` (each Low / Medium / High).
 
 For full output documentation see [docs/output.md](docs/output.md).
 
-## Consensus scoring
+## Confidence scoring
 
-Each circRNA receives a `tool_consensus` label based on three percentage-based components (each binned 1–4):
+Each merged circRNA is scored on two **independent** axes:
 
-- **bsj_score** - fraction of active tools detecting this BSJ
-- **isoform_score** - fraction of active tools with confirmed isoform structure
-- **overlap_score** - average pairwise spliced-length overlap fraction
+- **`bsj_consensus`** (`Low`/`Medium`/`High`) — fraction of active tools detecting this BSJ
+- **`isoform_consensus`** (`Low`/`Medium`/`High`) — fraction of active tools confirming this exon structure
 
-| Score (3–12) | Category |
-| ------------ | -------- |
-| 3–4          | Low      |
-| 5–8          | Medium   |
-| 9–12         | High     |
+Both are binned from the percentage of active tools (≤25% → Low, ≤75% → Medium, >75% → High). The two axes are independent: a circRNA can have a well-supported BSJ but uncertain isoform boundaries.
 
-> **Note:** Scores are normalised to the number of tools that ran. A `High` from 2 tools running (both fully agree) is not equivalent to `High` from 4 tools - latter is much more confident. The pipeline warns when fewer than 4 tools are active.
+The three output modes filter on these axes:
 
-### Scoring examples
+| Output            | Kept entries                              |
+| ----------------- | ----------------------------------------- |
+| `discovery`       | All (no filter)                           |
+| `balanced`        | ≥ Medium on both axes                     |
+| `high_confidence` | High on **both** axes                     |
 
-**4-tool run**
-
-| Scenario                                | bsj | iso | ovlp | total | Category |
-| --------------------------------------- | --- | --- | ---- | ----- | -------- |
-| All 4 agree, full isoform match         | 4   | 4   | 4    | **12** | High    |
-| 3 tools agree, good isoform             | 3   | 3   | 4    | **10** | High    |
-| All 4 BSJ, no isoform confirmation      | 4   | 1   | 1    | **6**  | Medium  |
-| 2 tools agree, some isoform             | 2   | 2   | 3    | **7**  | Medium  |
-| Only 1 tool detects this circRNA        | 1   | 1   | 1    | **3**  | Low     |
-
-**3-tool run**
-
-| Scenario                                | bsj | iso | ovlp | total | Category |
-| --------------------------------------- | --- | --- | ---- | ----- | -------- |
-| All 3 agree, full isoform match         | 4   | 4   | 4    | **12** | High    |
-| 2 tools agree, good isoform             | 3   | 3   | 4    | **10** | High    |
-| All 3 BSJ, no isoform confirmation      | 4   | 1   | 1    | **6**  | Medium  |
-| 2 tools, no isoform                     | 3   | 1   | 1    | **5**  | Medium  |
-| Only 1 tool                             | 2   | 1   | 1    | **4**  | Low     |
-
-**2-tool run**
-
-| Scenario                                | bsj | iso | ovlp | total | Category |
-| --------------------------------------- | --- | --- | ---- | ----- | -------- |
-| Both agree, full isoform match          | 4   | 4   | 4    | **12** | High    |
-| Both agree, moderate isoform            | 4   | 2   | 3    | **9**  | High    |
-| Both agree, no isoform                  | 4   | 1   | 1    | **6**  | Medium  |
-| Only 1 tool detects                     | 2   | 1   | 1    | **4**  | Low     |
+> **Note:** Scores reflect agreement among the tools that actually ran. A `High` from 2 tools (both agree) is not equivalent to `High` from 4 tools. The pipeline warns when fewer than 4 tools are active.
 
 ## Credits
 

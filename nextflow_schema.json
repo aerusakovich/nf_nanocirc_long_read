@@ -161,6 +161,13 @@
                     "default": 0.95,
                     "description": "Minimum reciprocal spliced-length overlap fraction for isoform confidence scoring.",
                     "fa_icon": "fas fa-percentage"
+                },
+                "run_benchmark_modes": {
+                    "type": "boolean",
+                    "default": false,
+                    "hidden": true,
+                    "description": "Also publish all research variants: legacy strict/relaxed/exon merge modes plus raw xstruct, priority, and all trusted-only/no-low combinations.",
+                    "fa_icon": "fas fa-flask"
                 }
             }
         },

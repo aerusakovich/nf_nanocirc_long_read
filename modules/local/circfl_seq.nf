@@ -57,22 +57,32 @@ process CIRCFL_SEQ {
         -g ${fasta} \\
         -a anno.gtf.gz \\
         -t ${task.cpus} \\
-        -o ${out}
+        -o ${out} || echo "[WARN] cRG found no circRNAs — will attempt mRG fallback"
 
     circfull mRG \\
         -f input.fastq \\
         -g ${fasta} \\
         -r ${out} \\
         -c ${out} \\
-        -o ${out}
+        -o ${out} || echo "[WARN] mRG failed — will fall back to RG results"
+
+    # Determine best available pass files (mRG preferred, RG as fallback)
+    if [ -s "${out}/mRG/circFL_Normal_pass.bed" ]; then
+        PASS_BED="${out}/mRG/circFL_Normal_pass.bed"
+        PASS_TXT="${out}/mRG/circFL_Normal_pass.txt"
+    else
+        echo "[WARN] No mRG output; falling back to RG/circFL_Normal_pass.bed"
+        PASS_BED="${out}/RG/circFL_Normal_pass.bed"
+        PASS_TXT="${out}/RG/circFL_Normal_pass.txt"
+    fi
 
     circfull anno \\
-        -b ${out}/mRG/circFL_Normal_pass.bed \\
+        -b "\${PASS_BED}" \\
         -a anno.gtf.gz \\
         -o ${out}/annotated
 
     circfull FL2BED \\
-        -c ${out}/mRG/circFL_Normal_pass.txt \\
+        -c "\${PASS_TXT}" \\
         -o ${out}/circFL_final.bed
 
     cat <<-END_VERSIONS > versions.yml

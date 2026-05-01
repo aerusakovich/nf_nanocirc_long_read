@@ -121,7 +121,7 @@ def convert(info_file, out_file):
             chrom_start = int(cols[3]) - 1   # 1-based GFF → 0-based BED
             chrom_end   = int(cols[4])        # end unchanged
             score       = cols[5]             # read count
-            strand      = cols[6]
+            strand      = cols[6] if cols[6] in ('+', '-', '.') else '.'
             attrs       = parse_attributes(cols[8])
 
             isoform_field = attrs.get("isoform")
@@ -157,8 +157,8 @@ def convert(info_file, out_file):
                     name,
                     score,
                     strand,
-                    str(chrom_start),   # thickStart
-                    str(chrom_end),     # thickEnd
+                    str(chrom_start),   # thickStart = thickEnd = start → no CDS
+                    str(chrom_start),   # thickEnd
                     "0",                # itemRgb
                     block_count,
                     block_sizes,

@@ -10,9 +10,12 @@ Confidence scoring (same system as add_isoform_confidence.py):
                         ≤ 25%  → 1 | ≤ 50%  → 2 | ≤ 75%  → 3 | > 75%  → 4
     isoform_score   : percentage of active tools with isoform overlap → 1-4, min 1
     overlap_score   : avg pairwise fraction → 1-4 (1 if no pairs)
-    final_score     : sum (3-12) → Low(3-4) / Medium(5-8) / High(9-12)
 
-NOTE: tool_consensus reflects agreement among the tools that were run.
+Independent consensus labels (score 1→Low, 2-3→Medium, 4→High):
+    bsj_consensus     : quality of BSJ detection across tools
+    isoform_consensus : quality of exon-structure agreement across tools
+
+NOTE: scores reflect agreement among the tools that were run.
       Running fewer than 4 tools reduces scoring resolution.
 
 Usage:
@@ -98,10 +101,10 @@ def frac_to_overlap_score(avg_frac):
     else: return 4
 
 
-def final_score_to_cat(score):
-    """Convert final score (3-12) to tool_consensus category."""
-    if score <= 4: return "Low"
-    elif score <= 8: return "Medium"
+def score_to_cat(score):
+    """Convert a 1-4 component score to Low / Medium / High."""
+    if score == 1: return "Low"
+    elif score <= 3: return "Medium"
     else: return "High"
 
 
@@ -220,10 +223,10 @@ def compute_group_scores(group, nodes_with_isoform, node_pair_fracs, n_active):
     else:
         overlap_score = 1
 
-    final_score    = bsj_score + isoform_score + overlap_score
-    tool_consensus = final_score_to_cat(final_score)
+    bsj_consensus     = score_to_cat(bsj_score)
+    isoform_consensus = score_to_cat(isoform_score)
 
-    return isoform_confidence, bsj_score, isoform_score, overlap_score, final_score, tool_consensus
+    return isoform_confidence, bsj_score, bsj_consensus, isoform_score, isoform_consensus, overlap_score
 
 
 def write_outputs(groups, active_tools, nodes_with_isoform,
@@ -236,8 +239,9 @@ def write_outputs(groups, active_tools, nodes_with_isoform,
     header_cols = (
         ["#chrom", "start", "end", "strand", "bsj_id"]
         + active_tools
-        + ["bsj_score", "isoform_confidence", "isoform_score",
-           "overlap_score", "final_score", "tool_consensus"]
+        + ["bsj_score", "bsj_consensus",
+           "isoform_confidence", "isoform_score", "isoform_consensus",
+           "overlap_score"]
     )
     header_line = "\t".join(header_cols)
     union_conf_lines.append(header_line)
@@ -265,8 +269,8 @@ def write_outputs(groups, active_tools, nodes_with_isoform,
             print_error("Non-numeric coordinates.", context="coords",
                         context_str=str(rep_coords))
 
-        (isoform_confidence, bsj_score, isoform_score, overlap_score,
-         final_score, tool_consensus) = compute_group_scores(
+        (isoform_confidence, bsj_score, bsj_consensus,
+         isoform_score, isoform_consensus, overlap_score) = compute_group_scores(
             group, nodes_with_isoform, node_pair_fracs, n_active)
 
         bsj_id     = make_bsj_key(chrom, start, end, strand)
@@ -275,7 +279,7 @@ def write_outputs(groups, active_tools, nodes_with_isoform,
         bed12_line = "\t".join([
             chrom, str(start_int), str(end_int),
             bsj_id, str(bsj_score), strand,
-            str(start_int), str(end_int), "0",
+            str(start_int), str(start_int), "0",
             "1", str(block_size) + ",", "0,",
         ])
 
@@ -283,8 +287,9 @@ def write_outputs(groups, active_tools, nodes_with_isoform,
         conf_row   = "\t".join(
             [chrom, str(start_int), str(end_int), strand, bsj_id]
             + tool_flags
-            + [str(bsj_score), str(isoform_confidence), str(isoform_score),
-               str(overlap_score), str(final_score), tool_consensus]
+            + [str(bsj_score), bsj_consensus,
+               str(isoform_confidence), str(isoform_score), isoform_consensus,
+               str(overlap_score)]
         )
 
         union_lines.append(bed12_line)
