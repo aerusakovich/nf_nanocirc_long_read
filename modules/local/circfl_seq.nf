@@ -1,6 +1,6 @@
 process CIRCFL_SEQ {
     tag "$meta.id"
-    label 'process_high'
+    label 'process_high_memory'
 
     containerOptions = "--writable-tmpfs"
 
