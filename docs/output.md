@@ -315,6 +315,55 @@ Types are assigned by intersecting BSJ coordinates against gene and exon BED fil
 
 ---
 
+## Cross-run merge
+
+When `--run_crossrun_merge true` is set and the samplesheet contains a `group` column, all samples sharing the same group are merged together after per-sample analysis. Each run is treated as an independent caller — the same `consensus_hybrid` algorithm and confidence scoring used within a sample (across tools) is applied across runs (across samples).
+
+In plain terms, the three tiers mean:
+
+| Tier              | What it takes to be retained |
+| ----------------- | ----------------------------- |
+| **`discovery`**   | Detected by **at least 1 tool** in **at least 1 run** — maximum sensitivity, use for exploration |
+| **`balanced`**    | **Multiple tools agreed** within a run AND **multiple runs** support it — recommended for most analyses |
+| **`high_confidence`** | **All tools agreed** within runs AND **most/all runs** support it — maximum precision, lowest false positive rate |
+
+### Output files
+
+<details markdown="1">
+<summary>Output files</summary>
+
+- `circrna/<group>/crossrun/`
+  - `<group>_<tier>_crossrun.bed12` — Merged BED12 filtered to the tier threshold
+  - `<group>_<tier>_crossrun_confidence.tsv` — Full intermediate TSV: all merged circRNAs with per-sample BSJ and isoform consensus columns
+  - `<group>_<tier>_crossrun_clean.tsv` — Wet-lab-friendly TSV: filtered circRNAs with type classification (see [Clean TSV format](#clean-tsv-format))
+
+</details>
+
+`<tier>` is one of `discovery`, `balanced`, or `high_confidence`. `<group>` is the group name from the samplesheet.
+
+### Count thresholds
+
+Minimum number of runs that must detect a circRNA for it to be retained, where `n` is the total number of runs in the group:
+
+| Tier              | Minimum runs required        |
+| ----------------- | ---------------------------- |
+| `discovery`       | ≥ 1 (all circRNAs retained)  |
+| `balanced`        | ≥ max(2, ceil(0.25 × n))     |
+| `high_confidence` | ≥ ceil(0.75 × n)             |
+
+### Cross-run confidence TSV format
+
+The `*_crossrun_confidence.tsv` has the same core columns as the per-sample confidence TSV, plus:
+
+| Column                        | Description                                              |
+| ----------------------------- | -------------------------------------------------------- |
+| `n_samples`                   | Number of runs detecting this circRNA                    |
+| `type`                        | circRNA biotype (see [type classification](#circrna-type-classification)) |
+| `<run>_bsj_consensus`         | BSJ consensus label for this run (`Low`/`Medium`/`High`, or empty if not detected) |
+| `<run>_isoform_consensus`     | Isoform consensus label for this run                     |
+
+---
+
 ## MultiQC
 
 <details markdown="1">
