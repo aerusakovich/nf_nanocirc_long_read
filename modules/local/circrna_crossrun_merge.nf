@@ -3,8 +3,8 @@ process CIRCRNA_CROSSRUN_MERGE {
     label 'process_medium'
 
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'https://depot.galaxyproject.org/singularity/bedtools:2.30.0--hc088bd4_0' :
-        'quay.io/biocontainers/bedtools:2.30.0--hc088bd4_0' }"
+        'https://depot.galaxyproject.org/singularity/pybedtools:0.12.0--py39h475c85d_0' :
+        'quay.io/biocontainers/pybedtools:0.12.0--py39h475c85d_0' }"
 
     input:
     tuple val(meta), path(bed_files), path(conf_tsvs)

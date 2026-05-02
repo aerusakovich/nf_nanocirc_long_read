@@ -12,7 +12,8 @@ The pipeline processes long-read nanopore FASTQ files through the following step
 2. **circRNA detection** — up to four tools run in parallel (isoCirc, CircFL-seq, CIRI-long, circnick-lrs)
 3. **BED12 conversion** — each tool's output is converted to a unified BED12 format
 4. **Merging & confidence scoring** — when two or more tools are active, results are merged using the hybrid smart-merge algorithm and scored on two independent confidence axes
-5. **MultiQC** — aggregated QC report
+5. **Annotation** — each merged output is annotated with GFF comparison, FASTA extraction, circRNA type classification, and expression counts
+6. **MultiQC** — aggregated QC report
 
 ---
 
@@ -252,6 +253,114 @@ Each axis is scored independently (1=Low, 2–3=Medium, 4=High based on binned p
 > Consensus labels always reflect agreement among the tools that were actually run.
 > A `High` from 2 tools means both tools agreed — it is not mathematically equivalent
 > to `High` from 4 tools. The pipeline emits a warning when fewer than 4 tools are active.
+
+---
+
+## Annotation
+
+Each merged output (discovery, balanced, high_confidence) is annotated per sample. Annotation runs when `--skip_annotation` is not set (default: enabled).
+
+### Output structure
+
+<details markdown="1">
+<summary>Output files</summary>
+
+- `circrna/<sample>/merged/smart/`
+  - `annotated/` — GFF comparison output and annotated TSV (with class codes and reference gene IDs)
+    - `<sample>_<tier>.annotated.tsv` — Full annotated TSV including isoform rows
+  - `clean/` — Wet-lab-friendly filtered TSV (main circRNAs only, no isoform rows)
+    - `<sample>_<tier>_clean.tsv`
+  - `fasta/` — FASTA sequences of detected circRNAs
+    - `<sample>_<tier>.fa`
+  - `gff/` — GFF3 files
+    - `<sample>_<tier>.gff3` — GFF3 derived from BED12
+    - `<sample>_<tier>.annotated.gtf` — GFFcompare annotated GTF
+
+</details>
+
+`<tier>` is one of `discovery`, `balanced`, or `high_confidence`.
+
+### Clean TSV format
+
+The clean TSV (`*_clean.tsv`) is the primary output for downstream analysis. It contains one row per main circRNA. Isoform rows — entries with `bsj_id` containing `|iso`, which represent minority-BSJ calls from tools that disagreed on the back-splice junction — are excluded. The full annotated TSV in `annotated/` retains these rows.
+
+| Column               | Description                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------------ |
+| `#chrom`             | Chromosome                                                                                       |
+| `start`              | BSJ start (0-based)                                                                              |
+| `end`                | BSJ end                                                                                          |
+| `strand`             | Strand (`+` or `-`)                                                                              |
+| `sel_block_count`    | Number of exon blocks in the selected isoform                                                    |
+| `sel_block_sizes`    | Comma-separated exon block sizes (bp)                                                            |
+| `sel_block_starts`   | Comma-separated exon block starts relative to `start`                                           |
+| `bsj_id`             | Unique identifier: `chrom:start-end:strand`                                                      |
+| `bsj_confidence`     | Number of tools detecting this BSJ (1–4)                                                         |
+| `isoform_confidence` | Number of tools with confirmed isoform overlap                                                   |
+| `class_code`         | GFFcompare class code describing the relationship to the reference annotation                    |
+| `ref_gene_id`        | Reference gene ID from the GTF (`.` if intergenic)                                              |
+| `type`               | circRNA biotype: `eciRNA`, `EIciRNA`, `ciRNA`, `antisense`, or `intergenic` (see below)         |
+| `supporting_reads`   | Read count from the highest-priority active tool (priority: isoCirc > CIRI-long > CircFL-seq > circnick-lrs) |
+
+#### circRNA type classification
+
+Types are assigned by intersecting BSJ coordinates against gene and exon BED files derived from the GTF:
+
+| Type          | Definition                                                                          |
+| ------------- | ----------------------------------------------------------------------------------- |
+| `eciRNA`      | Overlaps a gene on the same strand; at least one exon is fully contained within it |
+| `EIciRNA`     | Overlaps a gene on the same strand; partially overlaps an exon but no exon is fully contained |
+| `ciRNA`       | Overlaps a gene on the same strand; no exon overlap (purely intronic)               |
+| `antisense`   | Overlaps a gene on the opposite strand; no same-strand gene overlap                 |
+| `intergenic`  | No overlap with any annotated gene on either strand                                 |
+
+---
+
+## Cross-run merge
+
+When `--run_crossrun_merge true` is set and the samplesheet contains a `group` column, all samples sharing the same group are merged together after per-sample analysis. Each run is treated as an independent caller — the same `consensus_hybrid` algorithm and confidence scoring used within a sample (across tools) is applied across runs (across samples).
+
+In plain terms, the three tiers mean:
+
+| Tier              | What it takes to be retained |
+| ----------------- | ----------------------------- |
+| **`discovery`**   | Detected by **at least 1 tool** in **at least 1 run** — maximum sensitivity, use for exploration |
+| **`balanced`**    | **Multiple tools agreed** within a run AND **multiple runs** support it — recommended for most analyses |
+| **`high_confidence`** | **All tools agreed** within runs AND **most/all runs** support it — maximum precision, lowest false positive rate |
+
+### Output files
+
+<details markdown="1">
+<summary>Output files</summary>
+
+- `circrna/<group>/crossrun/`
+  - `<group>_<tier>_crossrun.bed12` — Merged BED12 filtered to the tier threshold
+  - `<group>_<tier>_crossrun_confidence.tsv` — Full intermediate TSV: all merged circRNAs with per-sample BSJ and isoform consensus columns
+  - `<group>_<tier>_crossrun_clean.tsv` — Wet-lab-friendly TSV: filtered circRNAs with type classification (see [Clean TSV format](#clean-tsv-format))
+
+</details>
+
+`<tier>` is one of `discovery`, `balanced`, or `high_confidence`. `<group>` is the group name from the samplesheet.
+
+### Count thresholds
+
+Minimum number of runs that must detect a circRNA for it to be retained, where `n` is the total number of runs in the group:
+
+| Tier              | Minimum runs required        |
+| ----------------- | ---------------------------- |
+| `discovery`       | ≥ 1 (all circRNAs retained)  |
+| `balanced`        | ≥ max(2, ceil(0.25 × n))     |
+| `high_confidence` | ≥ ceil(0.75 × n)             |
+
+### Cross-run confidence TSV format
+
+The `*_crossrun_confidence.tsv` has the same core columns as the per-sample confidence TSV, plus:
+
+| Column                        | Description                                              |
+| ----------------------------- | -------------------------------------------------------- |
+| `n_samples`                   | Number of runs detecting this circRNA                    |
+| `type`                        | circRNA biotype (see [type classification](#circrna-type-classification)) |
+| `<run>_bsj_consensus`         | BSJ consensus label for this run (`Low`/`Medium`/`High`, or empty if not detected) |
+| `<run>_isoform_consensus`     | Isoform consensus label for this run                     |
 
 ---
 

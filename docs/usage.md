@@ -161,6 +161,55 @@ The three merged output modes apply different filters to these axes:
 > [!WARNING]
 > **Fewer than 4 tools reduces scoring resolution.** The pipeline emits a warning when fewer than 4 tools are active. Consensus labels always reflect agreement among the tools that _ran_ — a `High` from 2 tools (both agree) is not the same statistical confidence as `High` from all 4 tools. See [scoring examples](#scoring-examples) below.
 
+### Cross-run merge
+
+When the same sample (or biological condition) is sequenced across multiple runs, results can be merged across runs to increase sensitivity and confidence. Each run is treated as an independent "tool" — the same consensus-hybrid algorithm and confidence scoring used for within-sample tool merging is applied across runs.
+
+To enable cross-run merge, add a `group` column to the samplesheet. Samples sharing the same group name are merged together:
+
+```csv
+sample,fastq,group
+run1,/data/run1.fq.gz,condition_A
+run2,/data/run2.fq.gz,condition_A
+run3,/data/run3.fq.gz,condition_A
+ctrl1,/data/ctrl1.fq.gz,condition_B
+ctrl2,/data/ctrl2.fq.gz,condition_B
+```
+
+Then set `--run_crossrun_merge true`:
+
+```bash
+nextflow run nf-core/nanocirc \
+    --input samplesheet.csv \
+    --run_crossrun_merge true \
+    ...
+```
+
+| Parameter              | Description                                           | Default |
+| ---------------------- | ----------------------------------------------------- | ------- |
+| `--run_crossrun_merge` | Enable cross-run merging using the `group` column     | `false` |
+
+In plain terms, the three tiers mean:
+
+| Tier              | What it takes to be retained |
+| ----------------- | ----------------------------- |
+| **`discovery`**   | Detected by **at least 1 tool** in **at least 1 run** — maximum sensitivity, use for exploration |
+| **`balanced`**    | **Multiple tools agreed** within a run AND **multiple runs** support it — recommended for most analyses |
+| **`high_confidence`** | **All tools agreed** within runs AND **most/all runs** support it — maximum precision, lowest false positive rate |
+
+**Count thresholds applied per tier:**
+
+The cross-run merge applies different minimum-sample-count filters depending on the confidence tier, where `n` is the number of runs in the group:
+
+| Tier              | Minimum samples required         |
+| ----------------- | -------------------------------- |
+| `discovery`       | ≥ 1 (all circRNAs retained)      |
+| `balanced`        | ≥ max(2, ceil(0.25 × n))         |
+| `high_confidence` | ≥ ceil(0.75 × n)                 |
+
+> [!NOTE]
+> The `group` column is optional. Samples without a group are processed per-sample only and are not included in any cross-run merge output.
+
 ### QC options
 
 | Parameter        | Description                      | Default |
