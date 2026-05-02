@@ -99,16 +99,31 @@ def lookup(index, bsj_id, bsj_tol):
 
 # ── circRNA type classification ────────────────────────────────────────────────
 
+def _spliced_length(block_sizes_str):
+    return sum(int(x) for x in block_sizes_str.split(',') if x.strip())
+
+
 def classify_types(rows, gene_bed, exon_bed):
     """
     Classify each circRNA as: eciRNA | EIciRNA | ciRNA | antisense | intergenic.
+
+    Uses bedtools intersect -split -wo on BED12 circRNA records; overlap fractions
+    are computed in Python from the returned overlap length divided by spliced length,
+    avoiding the bedtools -f/-F fraction bug with -split.
+
+      eciRNA     — same-strand gene; exon overlap covers 100% of spliced length
+      EIciRNA    — same-strand gene; partial exon overlap (retains intronic content)
+      ciRNA      — same-strand gene; no exon overlap (purely intronic)
+      antisense  — opposite-strand gene overlap only
+      intergenic — no gene overlap on either strand
+
     Returns {bsj_id: type_string}.
     """
     if not rows:
         return {}
 
     tmp_bed = '.type_class_tmp.bed'
-    id_to_coord = {}
+    spliced = {}
     with open(tmp_bed, 'w') as fh:
         for row in rows:
             chrom  = row.get('#chrom', '')
@@ -116,40 +131,57 @@ def classify_types(rows, gene_bed, exon_bed):
             end    = row.get('end', '')
             strand = row.get('strand', '.')
             bsj_id = row.get('bsj_id', '').split('|')[0]
+            # cross-run rows carry BED12 block columns from smart_merge output
+            block_count  = row.get('sel_block_count',  '1')
+            block_sizes  = row.get('sel_block_sizes',  '') or f"{int(end)-int(start)},"
+            block_starts = row.get('sel_block_starts', '0')
             if chrom and start and end:
-                fh.write(f"{chrom}\t{start}\t{end}\t{bsj_id}\t0\t{strand}\n")
-                id_to_coord[bsj_id] = (chrom, start, end, strand)
+                fh.write(
+                    f"{chrom}\t{start}\t{end}\t{bsj_id}\t0\t{strand}"
+                    f"\t{start}\t{end}\t0\t{block_count}\t{block_sizes}\t{block_starts}\n"
+                )
+                spliced[bsj_id] = _spliced_length(block_sizes)
 
-    def intersect_ids(flags):
+    def run_intersect(b_file, strand_flag):
+        """Run bedtools -split -wo; return {bsj_id: total_overlap_bp}."""
         r = subprocess.run(
-            f"bedtools intersect -a {tmp_bed} -b {flags} -wa",
+            f"bedtools intersect -a {tmp_bed} -b {b_file} {strand_flag} -split -wo",
             shell=True, capture_output=True, text=True
         )
-        ids = set()
+        totals = defaultdict(int)
         for line in r.stdout.strip().split('\n'):
             p = line.split('\t')
-            if len(p) >= 4 and p[3]:
-                ids.add(p[3])
-        return ids
+            # A=12 cols, B=6 cols, overlap=1 → 19 cols total
+            if len(p) >= 19 and p[3]:
+                try:
+                    totals[p[3]] += int(p[18])
+                except ValueError:
+                    pass
+        return totals
 
-    gene_sense     = intersect_ids(f"{gene_bed} -s")
-    exon_full      = intersect_ids(f"{exon_bed} -s -f 1.0")
-    exon_partial   = intersect_ids(f"{exon_bed} -s")
-    gene_antisense = intersect_ids(f"{gene_bed} -S")
+    gene_sense_ovlp     = run_intersect(gene_bed, '-s')
+    gene_antisense_ovlp = run_intersect(gene_bed, '-S')
+    exon_ovlp           = run_intersect(exon_bed,  '-s')
 
     types = {}
-    for bsj_id in id_to_coord:
-        if bsj_id in gene_sense:
-            if bsj_id in exon_full:
+    for bsj_id, slen in spliced.items():
+        in_sense     = bsj_id in gene_sense_ovlp
+        in_antisense = bsj_id in gene_antisense_ovlp
+
+        if in_sense:
+            exon_bp   = exon_ovlp.get(bsj_id, 0)
+            exon_frac = exon_bp / slen if slen > 0 else 0.0
+            if exon_frac >= 1.0:
                 typ = 'eciRNA'
-            elif bsj_id in exon_partial:
+            elif exon_frac > 0:
                 typ = 'EIciRNA'
             else:
                 typ = 'ciRNA'
-        elif bsj_id in gene_antisense:
+        elif in_antisense:
             typ = 'antisense'
         else:
             typ = 'intergenic'
+
         types[bsj_id] = typ
 
     try:
