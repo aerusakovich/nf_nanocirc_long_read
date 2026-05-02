@@ -307,10 +307,10 @@ Types are assigned by intersecting BSJ coordinates against gene and exon BED fil
 
 | Type          | Definition                                                                          |
 | ------------- | ----------------------------------------------------------------------------------- |
-| `eciRNA`      | Overlaps a gene on the same strand; at least one exon is fully contained within it |
-| `EIciRNA`     | Overlaps a gene on the same strand; partially overlaps an exon but no exon is fully contained |
-| `ciRNA`       | Overlaps a gene on the same strand; no exon overlap (purely intronic)               |
-| `antisense`   | Overlaps a gene on the opposite strand; no same-strand gene overlap                 |
+| `eciRNA`      | Same-strand gene overlap; the circRNA is fully covered by exonic regions (purely exonic) |
+| `EIciRNA`     | Same-strand gene overlap; overlaps exons but retains intronic content (exon–intron circRNA) |
+| `ciRNA`       | Same-strand gene overlap; no exon overlap (purely intronic)                         |
+| `antisense`   | Overlaps a gene on the opposite strand only                                         |
 | `intergenic`  | No overlap with any annotated gene on either strand                                 |
 
 ---
