@@ -2,60 +2,396 @@
 
 ## Introduction
 
-This document describes the output produced by the pipeline. Most of the plots are taken from the MultiQC report, which summarises results at the end of the pipeline.
-
-The directories listed below will be created in the results directory after the pipeline has finished. All paths are relative to the top-level results directory.
-
-<!-- TODO nf-core: Write this documentation describing your workflow's output -->
+This document describes the output produced by the pipeline. All paths are relative to the top-level results directory specified with `--outdir`.
 
 ## Pipeline overview
 
-The pipeline is built using [Nextflow](https://www.nextflow.io/) and processes data using the following steps:
+The pipeline processes long-read nanopore FASTQ files through the following steps:
 
-- [FastQC](#fastqc) - Raw read QC
-- [MultiQC](#multiqc) - Aggregate report describing results and QC from the whole pipeline
-- [Pipeline information](#pipeline-information) - Report metrics generated during the workflow execution
+1. **Quality control** — FastQC and NanoPlot assess read quality
+2. **circRNA detection** — up to four tools run in parallel (isoCirc, CircFL-seq, CIRI-long, circnick-lrs)
+3. **BED12 conversion** — each tool's output is converted to a unified BED12 format
+4. **Merging & confidence scoring** — when two or more tools are active, results are merged using the hybrid smart-merge algorithm and scored on two independent confidence axes
+5. **Annotation** — each merged output is annotated with GFF comparison, FASTA extraction, circRNA type classification, and expression counts
+6. **MultiQC** — aggregated QC report
+
+---
+
+## Quality control
 
 ### FastQC
 
 <details markdown="1">
 <summary>Output files</summary>
 
-- `fastqc/`
-  - `*_fastqc.html`: FastQC report containing quality metrics.
-  - `*_fastqc.zip`: Zip archive containing the FastQC report, tab-delimited data file and plot images.
+- `qc/<sample>/fastqc/`
+  - `*.html` — FastQC report with quality metrics per sample
+  - `*.zip` — Archive containing the report and raw data
 
 </details>
 
-[FastQC](http://www.bioinformatics.babraham.ac.uk/projects/fastqc/) gives general quality metrics about your sequenced reads. It provides information about the quality score distribution across your reads, per base sequence content (%A/T/G/C), adapter contamination and overrepresented sequences. For further reading and documentation see the [FastQC help pages](http://www.bioinformatics.babraham.ac.uk/projects/fastqc/Help/).
+[FastQC](https://www.bioinformatics.babraham.ac.uk/projects/fastqc/) reports per-read quality scores, GC content, sequence length distribution, and adapter content. Useful for flagging low-quality or contaminated samples before analysis.
 
-### MultiQC
+### NanoPlot
+
+<details markdown="1">
+<summary>Output files</summary>
+
+- `qc/<sample>/nanoplot/`
+  - `NanoPlot-report.html` — Interactive HTML report
+  - `NanoStats.txt` — Summary statistics (N50, mean length, mean quality, etc.)
+  - Various PNG plots: read length histogram, quality vs length scatter, etc.
+
+</details>
+
+[NanoPlot](https://github.com/wdecoster/NanoPlot) is designed specifically for nanopore data and provides read length distributions, quality score distributions, and yield-over-time plots.
+
+---
+
+## circRNA detection
+
+Each active tool writes its raw output to a dedicated subdirectory and its BED12 file to a shared `bed12/` directory.
+
+### isoCirc
+
+<details markdown="1">
+<summary>Output files</summary>
+
+- `circrna/<sample>/isocirc/`
+  - `isocirc_output/isocirc.bed` — Main isoCirc output (BED format with isoform detail)
+  - `isocirc_output/` — Full isoCirc output directory
+
+</details>
+
+[isoCirc](https://github.com/Xinglab/isoCirc) detects circRNA isoforms from nanopore long reads using full-length read alignment.
+
+### CircFL-seq
+
+<details markdown="1">
+<summary>Output files</summary>
+
+- `circrna/<sample>/circfl_seq/`
+  - `circFL_final.bed` — Final CircFL-seq output
+  - Full pipeline output directory including intermediate RG, DNSC, cRG, mRG steps
+
+</details>
+
+[CircFL-seq](https://github.com/yangence/circfull) reconstructs full-length circRNA isoforms from nanopore sequencing using a rolling-circle amplification model.
+
+### CIRI-long
+
+<details markdown="1">
+<summary>Output files</summary>
+
+- `circrna/<sample>/ciri_long/`
+  - `<sample>.info` — Main CIRI-long output with circRNA calls and isoform structure
+  - `<sample>.isoforms` — Isoform-level output
+
+</details>
+
+[CIRI-long](https://github.com/bioinfo-biols/CIRI-long) uses a seed-and-extend strategy for circRNA detection and isoform characterisation from long reads.
+
+### circnick-lrs
+
+<details markdown="1">
+<summary>Output files</summary>
+
+- `circrna/<sample>/circnick_lrs/`
+  - `<sample>/<sample>.circRNA_candidates.annotated.txt` — Annotated circRNA candidates
+  - `<sample>/<sample>.circ_circRNA_exon_usage_length_of_exons.txt` — Exon usage per circRNA
+  - `<sample>/<sample>.introns...intronCov.bed` — Intron coverage file
+- `circrna/<sample>/circnick_lrs/lifted/` _(only if `--circnick_liftover_chain` was provided)_
+  - `*_lifted_annotated.txt` — Coordinates lifted to target genome build
+  - `*_lifted_exon_usage.txt`
+  - `*_lifted_intron_cov.bed`
+  - `*_liftover_failed.tsv` — circRNAs excluded due to failed liftover
+
+</details>
+
+[circnick-lrs](https://github.com/dzhang32/circnick) uses built-in mm10 or hg19 references. Provide `--circnick_liftover_chain` if your analysis uses a different genome build.
+
+### BED12 files
+
+<details markdown="1">
+<summary>Output files</summary>
+
+- `circrna/<sample>/bed12/`
+  - `<sample>_cirilong.bed12` — CIRI-long output in BED12
+  - `<sample>_circnick.bed12` — circnick-lrs output in BED12
+  - `isocirc.bed` — isoCirc output (already in BED format)
+  - `circFL_final.bed` — CircFL-seq output (already in BED format)
+
+</details>
+
+All tool outputs are converted to a 12-column BED format (BED12) for downstream merging. BED12 columns: chrom, start, end, name, score (read count), strand, thickStart, thickEnd, itemRgb, blockCount, blockSizes, blockStarts.
+
+---
+
+## Merged outputs
+
+Merging is performed when **two or more** detection tools are active. All tools are first grouped by relaxed BSJ coordinates (within `--circrna_bsj_tolerance` bp). Within each group, a merge algorithm selects the representative BSJ and exon structure. The result is confidence-scored on two independent axes and optionally filtered before publication.
+
+### Pairwise comparisons
+
+<details markdown="1">
+<summary>Output files</summary>
+
+- `circrna/<sample>/merged/pairs/`
+  - `<tool_a>_vs_<tool_b>.txt` — bedtools intersect output for each tool pair (used for isoform confidence scoring)
+
+</details>
+
+All pairwise combinations of active tools are compared using `bedtools intersect -split -wo` to identify shared circRNA isoforms.
+
+### Merge algorithms
+
+All tools within a relaxed-BSJ group (coordinates within `--circrna_bsj_tolerance` bp) are treated as candidates for the same circRNA. A merge algorithm selects the representative BSJ and exon structure from those candidates.
+
+**BSJ selection** (all modes except `priority`): majority vote across all tools; ties broken by tool priority CIRI-long > CircFL-seq > IsoCirc > CircNick-LRS.
+
+**Structure selection** differs between modes and is described in the tables below.
+
+#### Default merge mode
+
+The pipeline uses `consensus_hybrid` as its merge algorithm.
+
+| Property | `consensus_hybrid` |
+| -------- | ------------------ |
+| BSJ | Majority vote across all tools |
+| Structure vote participants | Tools sharing the **exact winning BSJ** only |
+| Coordinate comparison | Absolute genomic coords (boundaries within `--circrna_bsj_tolerance` bp) |
+| Rebasing of minority-BSJ tools | **No** — tools with a different BSJ do not contribute to the structure vote |
+| Minority-BSJ tool handling | Emitted as separate isoform entries at their own BSJ coordinates |
+| Structure tie-break priority | IsoCirc > CIRI-long > CircNick-LRS > CircFL-seq |
+
+This design selects the most-supported exon structure among tools that agree on the BSJ, without shifting coordinates from tools that landed at a slightly different junction. Minority-BSJ isoforms are preserved in the output rather than silently discarded.
+
+#### Default output files
+
+<details markdown="1">
+<summary>Output files</summary>
+
+- `circrna/<sample>/merged/smart/`
+  - `<sample>_discovery.bed12` — hybrid, unfiltered (maximum recall)
+  - `<sample>_discovery_confidence.tsv`
+  - `<sample>_balanced.bed12` — hybrid + no_low filter (best F1)
+  - `<sample>_balanced_confidence.tsv`
+  - `<sample>_high_confidence.bed12` — hybrid + high_only filter (best precision)
+  - `<sample>_high_confidence_confidence.tsv`
+
+</details>
+
+Three confidence-filtered outputs are published by default. After merging, each entry is scored on two independent confidence axes (`bsj_consensus` and `isoform_consensus`, each Low / Medium / High) and one of three filters is applied:
+
+| Output | Filter | Rule | Axes retained |
+| ------ | ------ | ---- | ------------- |
+| **`discovery`** | none | Keep all entries | any |
+| **`balanced`** | `no_low` | Drop entries where either axis is Low | ≥ Medium on both |
+| **`high_confidence`** | `high_only` | Keep only entries where both axes are High | High on both |
+
+#### Additional merge modes (`--run_benchmark_modes`)
+
+Three further algorithms are available for research and benchmarking. All were outperformed by `consensus_hybrid` in benchmark evaluation and are not published by default.
+
+| Mode | BSJ selection | Structure vote participants | Minority-BSJ rebasing | Minority-BSJ handling |
+| ---- | ------------- | -------------------------- | --------------------- | --------------------- |
+| `consensus` | Majority vote | Exact-BSJ tools only | No | Separate isoforms at own coords |
+| `consensus_xstruct` | Majority vote | All tools in group | **Yes** — shifted to winning BSJ | Folded into structure vote |
+| `priority` | Highest-priority tool | Highest-priority tool | No | Separate isoforms at own coords |
+
+Key differences from `consensus_hybrid`:
+
+- **`consensus`** uses string equality for structure comparison rather than coordinate similarity — two tools reporting the same exon structure with a 1 bp boundary difference are treated as distinct isoforms.
+- **`consensus_xstruct`** includes minority-BSJ tools in the structure vote by rebasing their exon coordinates to the winning BSJ. This can incorporate more structural information but may introduce coordinate imprecision when BSJ offset is non-trivial.
+- **`priority`** skips voting entirely — BSJ and structure come unconditionally from the single highest-priority tool present.
+
+With `--run_benchmark_modes`, all three additional algorithms are published with four filter variants each (unfiltered, `no_low`, `trusted_only`, `high_only`).
+
+The `trusted_only` filter is only available in benchmark mode:
+
+| Filter | Rule |
+| ------ | ---- |
+| `trusted_only` | Drop Low-confidence entries unless the source tool is CIRI-long or IsoCirc |
+
+### Confidence TSV format
+
+All `*_confidence.tsv` files share a common format. Confidence is assessed on two **independent axes**:
+
+- **`bsj_consensus`** — quality of BSJ detection: what fraction of active tools agreed on this back-splice junction?
+- **`isoform_consensus`** — quality of exon-structure agreement: how well do tools agree on the exon boundaries of this isoform?
+
+Each axis is scored independently (1=Low, 2–3=Medium, 4=High based on binned percentage of tools) allowing a circRNA to have a well-supported BSJ but uncertain isoform structure, or vice versa.
+
+| Column               | Description                                                                 |
+| -------------------- | --------------------------------------------------------------------------- |
+| `#chrom`             | Chromosome                                                                  |
+| `start`              | BSJ start (0-based)                                                         |
+| `end`                | BSJ end                                                                     |
+| `strand`             | Strand (`+` or `-`)                                                         |
+| `bsj_id`             | Unique identifier: `chrom:start-end:strand` (isoforms suffixed `\|iso*`)   |
+| `bsj_confidence`     | Number of tools detecting this BSJ (1–4)                                    |
+| `<tool>`             | Per-tool presence flag: `1` if detected, `0` if not (one column per tool)  |
+| `<tool>_block_sizes` | BED12 block sizes from this tool's call                                     |
+| `<tool>_block_starts`| BED12 block starts from this tool's call                                    |
+| `isoform_confidence` | Number of tools with confirmed isoform overlap                              |
+| `bsj_score`          | Percentage of active tools detecting this BSJ, binned 1–4                  |
+| `isoform_score`      | Percentage of active tools with isoform support, binned 1–4 (min 1)        |
+| `overlap_score`      | Average pairwise spliced-length overlap fraction, binned 1–4               |
+| `bsj_consensus`      | BSJ confidence label: `Low` (score 1), `Medium` (2–3), `High` (4)         |
+| `isoform_consensus`  | Isoform confidence label: `Low` (score 1), `Medium` (2–3), `High` (4)     |
+
+**Scoring bins (percentage of active tools):**
+
+| % of active tools | Score | Consensus |
+| ----------------- | ----- | --------- |
+| ≤ 25%             | 1     | Low       |
+| ≤ 50%             | 2     | Medium    |
+| ≤ 75%             | 3     | Medium    |
+| > 75%             | 4     | High      |
+
+> [!NOTE]
+> Consensus labels always reflect agreement among the tools that were actually run.
+> A `High` from 2 tools means both tools agreed — it is not mathematically equivalent
+> to `High` from 4 tools. The pipeline emits a warning when fewer than 4 tools are active.
+
+---
+
+## Annotation
+
+Each merged output (discovery, balanced, high_confidence) is annotated per sample. Annotation runs when `--skip_annotation` is not set (default: enabled).
+
+### Output structure
+
+<details markdown="1">
+<summary>Output files</summary>
+
+- `circrna/<sample>/merged/smart/`
+  - `annotated/` — GFF comparison output and annotated TSV (with class codes and reference gene IDs)
+    - `<sample>_<tier>.annotated.tsv` — Full annotated TSV including isoform rows
+  - `clean/` — Wet-lab-friendly filtered TSV (main circRNAs only, no isoform rows)
+    - `<sample>_<tier>_clean.tsv`
+  - `fasta/` — FASTA sequences of detected circRNAs
+    - `<sample>_<tier>.fa`
+  - `gff/` — GFF3 files
+    - `<sample>_<tier>.gff3` — GFF3 derived from BED12
+    - `<sample>_<tier>.annotated.gtf` — GFFcompare annotated GTF
+
+</details>
+
+`<tier>` is one of `discovery`, `balanced`, or `high_confidence`.
+
+### Clean TSV format
+
+The clean TSV (`*_clean.tsv`) is the primary output for downstream analysis. It contains one row per main circRNA. Isoform rows — entries with `bsj_id` containing `|iso`, which represent minority-BSJ calls from tools that disagreed on the back-splice junction — are excluded. The full annotated TSV in `annotated/` retains these rows.
+
+| Column               | Description                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------------ |
+| `#chrom`             | Chromosome                                                                                       |
+| `start`              | BSJ start (0-based)                                                                              |
+| `end`                | BSJ end                                                                                          |
+| `strand`             | Strand (`+` or `-`)                                                                              |
+| `sel_block_count`    | Number of exon blocks in the selected isoform                                                    |
+| `sel_block_sizes`    | Comma-separated exon block sizes (bp)                                                            |
+| `sel_block_starts`   | Comma-separated exon block starts relative to `start`                                           |
+| `bsj_id`             | Unique identifier: `chrom:start-end:strand`                                                      |
+| `bsj_confidence`     | Number of tools detecting this BSJ (1–4)                                                         |
+| `isoform_confidence` | Number of tools with confirmed isoform overlap                                                   |
+| `class_code`         | GFFcompare class code describing the relationship to the reference annotation                    |
+| `ref_gene_id`        | Reference gene ID from the GTF (`.` if intergenic)                                              |
+| `type`               | circRNA biotype: `eciRNA`, `EIciRNA`, `ciRNA`, `antisense`, or `intergenic` (see below)         |
+| `supporting_reads`   | Read count from the highest-priority active tool (priority: isoCirc > CIRI-long > CircFL-seq > circnick-lrs) |
+
+#### circRNA type classification
+
+Types are assigned by intersecting BSJ coordinates against gene and exon BED files derived from the GTF:
+
+| Type          | Definition                                                                          |
+| ------------- | ----------------------------------------------------------------------------------- |
+| `eciRNA`      | Same-strand gene overlap; the circRNA is fully covered by exonic regions (purely exonic) |
+| `EIciRNA`     | Same-strand gene overlap; overlaps exons but retains intronic content (exon–intron circRNA) |
+| `ciRNA`       | Same-strand gene overlap; no exon overlap (purely intronic)                         |
+| `antisense`   | Overlaps a gene on the opposite strand only                                         |
+| `intergenic`  | No overlap with any annotated gene on either strand                                 |
+
+---
+
+## Cross-run merge
+
+When `--run_crossrun_merge true` is set and the samplesheet contains a `group` column, all samples sharing the same group are merged together after per-sample analysis. Each run is treated as an independent caller — the same `consensus_hybrid` algorithm and confidence scoring used within a sample (across tools) is applied across runs (across samples).
+
+In plain terms, the three tiers mean:
+
+| Tier              | What it takes to be retained |
+| ----------------- | ----------------------------- |
+| **`discovery`**   | Detected by **at least 1 tool** in **at least 1 run** — maximum sensitivity, use for exploration |
+| **`balanced`**    | **Multiple tools agreed** within a run AND **multiple runs** support it — recommended for most analyses |
+| **`high_confidence`** | **All tools agreed** within runs AND **most/all runs** support it — maximum precision, lowest false positive rate |
+
+### Output files
+
+<details markdown="1">
+<summary>Output files</summary>
+
+- `circrna/<group>/crossrun/`
+  - `<group>_<tier>_crossrun.bed12` — Merged BED12 filtered to the tier threshold
+  - `<group>_<tier>_crossrun_confidence.tsv` — Full intermediate TSV: all merged circRNAs with per-sample BSJ and isoform consensus columns
+  - `<group>_<tier>_crossrun_clean.tsv` — Wet-lab-friendly TSV: filtered circRNAs with type classification (see [Clean TSV format](#clean-tsv-format))
+
+</details>
+
+`<tier>` is one of `discovery`, `balanced`, or `high_confidence`. `<group>` is the group name from the samplesheet.
+
+### Count thresholds
+
+Minimum number of runs that must detect a circRNA for it to be retained, where `n` is the total number of runs in the group:
+
+| Tier              | Minimum runs required        |
+| ----------------- | ---------------------------- |
+| `discovery`       | ≥ 1 (all circRNAs retained)  |
+| `balanced`        | ≥ max(2, ceil(0.25 × n))     |
+| `high_confidence` | ≥ ceil(0.75 × n)             |
+
+### Cross-run confidence TSV format
+
+The `*_crossrun_confidence.tsv` has the same core columns as the per-sample confidence TSV, plus:
+
+| Column                        | Description                                              |
+| ----------------------------- | -------------------------------------------------------- |
+| `n_samples`                   | Number of runs detecting this circRNA                    |
+| `type`                        | circRNA biotype (see [type classification](#circrna-type-classification)) |
+| `<run>_bsj_consensus`         | BSJ consensus label for this run (`Low`/`Medium`/`High`, or empty if not detected) |
+| `<run>_isoform_consensus`     | Isoform consensus label for this run                     |
+
+---
+
+## MultiQC
 
 <details markdown="1">
 <summary>Output files</summary>
 
 - `multiqc/`
-  - `multiqc_report.html`: a standalone HTML file that can be viewed in your web browser.
-  - `multiqc_data/`: directory containing parsed statistics from the different tools used in the pipeline.
-  - `multiqc_plots/`: directory containing static images from the report in various formats.
+  - `multiqc_report.html` — Standalone HTML report viewable in any browser
+  - `multiqc_data/` — Parsed statistics from all tools
+  - `multiqc_plots/` — Static plot images
 
 </details>
 
-[MultiQC](http://multiqc.info) is a visualization tool that generates a single HTML report summarising all samples in your project. Most of the pipeline QC results are visualised in the report and further statistics are available in the report data directory.
+[MultiQC](https://multiqc.info) aggregates QC results from FastQC and NanoPlot across all samples into a single report. Skip with `--skip_multiqc`.
 
-Results generated by MultiQC collate pipeline QC from supported tools e.g. FastQC. The pipeline has special steps which also allow the software versions to be reported in the MultiQC output for future traceability. For more information about how to use MultiQC reports, see <http://multiqc.info>.
+---
 
-### Pipeline information
+## Pipeline information
 
 <details markdown="1">
 <summary>Output files</summary>
 
 - `pipeline_info/`
-  - Reports generated by Nextflow: `execution_report.html`, `execution_timeline.html`, `execution_trace.txt` and `pipeline_dag.dot`/`pipeline_dag.svg`.
-  - Reports generated by the pipeline: `pipeline_report.html`, `pipeline_report.txt` and `software_versions.yml`. The `pipeline_report*` files will only be present if the `--email` / `--email_on_fail` parameter's are used when running the pipeline.
-  - Reformatted samplesheet files used as input to the pipeline: `samplesheet.valid.csv`.
-  - Parameters used by the pipeline run: `params.json`.
+  - `execution_report_*.html` — Nextflow execution report (resource usage per process)
+  - `execution_timeline_*.html` — Timeline of all processes
+  - `execution_trace_*.txt` — Raw trace file with per-task metrics
+  - `pipeline_dag_*.html` — Directed acyclic graph of the pipeline
+  - `nf_core_nanocirc_software_mqc_versions.yml` — Software versions for all tools
 
 </details>
 
-[Nextflow](https://www.nextflow.io/docs/latest/tracing.html) provides excellent functionality for generating various reports relevant to the running and execution of the pipeline. This will allow you to troubleshoot errors with the running of the pipeline, and also provide you with other information such as launch commands, run times and resource usage.
+Nextflow automatically generates execution reports for every run. These are useful for troubleshooting, optimising resource requests, and recording the exact software versions used.
