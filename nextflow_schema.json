@@ -162,6 +162,12 @@
                     "description": "Minimum reciprocal spliced-length overlap fraction for isoform confidence scoring.",
                     "fa_icon": "fas fa-percentage"
                 },
+                "run_crossrun_merge": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Merge circRNA calls across samples that share the same 'group' value in the samplesheet. Requires the 'group' column to be present.",
+                    "fa_icon": "fas fa-object-group"
+                },
                 "run_benchmark_modes": {
                     "type": "boolean",
                     "default": false,

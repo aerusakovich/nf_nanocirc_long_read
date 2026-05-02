@@ -7,7 +7,8 @@ include { FASTQC                 } from '../modules/nf-core/fastqc/main'
 include { NANOPLOT               } from '../modules/nf-core/nanoplot/main'
 include { MULTIQC                } from '../modules/nf-core/multiqc/main'
 include { FASTQ_RENAME           } from '../modules/local/fastq_rename'
-include { CIRCRNA_ANALYSIS       } from '../subworkflows/local/circrna_analysis'
+include { CIRCRNA_ANALYSIS            } from '../subworkflows/local/circrna_analysis'
+include { CIRCRNA_CROSSRUN_MERGE  } from '../modules/local/circrna_crossrun_merge'
 include { paramsSummaryMap       } from 'plugin/nf-schema'
 include { paramsSummaryMultiqc   } from '../subworkflows/nf-core/utils_nfcore_pipeline'
 include { softwareVersionsToYAML } from '../subworkflows/nf-core/utils_nfcore_pipeline'
@@ -76,6 +77,15 @@ workflow NANOCIRC {
         }
     }
 
+    if (params.run_crossrun_merge) {
+        // Validate: every sample must declare a group when cross-run merge is on
+        ch_samplesheet
+            .filter { meta, _fastq -> !meta.group }
+            .subscribe { meta, _fastq ->
+                error("--run_crossrun_merge requires a 'group' column in the samplesheet, but sample '${meta.id}' has none.")
+            }
+    }
+
     CIRCRNA_ANALYSIS (
         ch_fastq,
         file(params.fasta, checkIfExists: true),
@@ -83,6 +93,36 @@ workflow NANOCIRC {
         params.circrna_db ? file(params.circrna_db, checkIfExists: true) : file('NO_FILE')
     )
     ch_versions = ch_versions.mix(CIRCRNA_ANALYSIS.out.versions)
+
+    //
+    // Cross-sample merge: group per-sample outputs by samplesheet 'group' field
+    //
+    if (params.run_crossrun_merge) {
+        def group_by_tier = { bed_ch, conf_ch, tier_name ->
+            bed_ch
+                .filter  { meta, _bed -> meta.group }
+                .join    ( conf_ch, by: 0 )
+                .map     { meta, bed, tsv -> tuple(meta.group, meta.id, bed, tsv) }
+                .groupTuple()
+                .map     { grp, sample_ids, beds, tsvs ->
+                    tuple([id: grp, sample_ids: sample_ids, tier: tier_name], beds, tsvs)
+                }
+        }
+
+        ch_crossrun = group_by_tier(
+                CIRCRNA_ANALYSIS.out.discovery_bed,  CIRCRNA_ANALYSIS.out.discovery_conf,  'discovery')
+            .mix(group_by_tier(
+                CIRCRNA_ANALYSIS.out.balanced_bed,   CIRCRNA_ANALYSIS.out.balanced_conf,   'balanced'))
+            .mix(group_by_tier(
+                CIRCRNA_ANALYSIS.out.high_conf_bed,  CIRCRNA_ANALYSIS.out.high_conf_conf,  'high_confidence'))
+
+        CIRCRNA_CROSSRUN_MERGE (
+            ch_crossrun,
+            CIRCRNA_ANALYSIS.out.gene_bed,
+            CIRCRNA_ANALYSIS.out.exon_bed
+        )
+        ch_versions = ch_versions.mix(CIRCRNA_CROSSRUN_MERGE.out.versions.first())
+    }
 
     //
     // Collate and save software versions

@@ -24,6 +24,8 @@ include { CIRCRNA_CONFIDENCE_FILTER as CIRCRNA_FILTER_XSTRUCT_NO_LOW     } from 
 include { CIRCRNA_CONFIDENCE_FILTER as CIRCRNA_FILTER_XSTRUCT_TRUSTED    } from '../../modules/local/circrna_confidence_filter'
 include { CIRCRNA_CONFIDENCE_FILTER as CIRCRNA_FILTER_PRIORITY_NO_LOW    } from '../../modules/local/circrna_confidence_filter'
 include { CIRCRNA_CONFIDENCE_FILTER as CIRCRNA_FILTER_PRIORITY_TRUSTED   } from '../../modules/local/circrna_confidence_filter'
+include { GTF_TO_FEATURE_BED     } from '../../modules/local/gtf_to_feature_bed'
+include { CIRCRNA_FINALIZE       } from '../../modules/local/circrna_finalize'
 include { CIRCRNA_ANNOTATE       } from './circrna_annotate'
 
 workflow CIRCRNA_ANALYSIS {
@@ -37,6 +39,12 @@ workflow CIRCRNA_ANALYSIS {
     main:
 
     ch_versions = channel.empty()
+
+    // Gene/exon BED files derived from GTF — used for type classification
+    GTF_TO_FEATURE_BED(gtf)
+    ch_versions = ch_versions.mix(GTF_TO_FEATURE_BED.out.versions)
+    ch_gene_bed = GTF_TO_FEATURE_BED.out.gene_bed.first()
+    ch_exon_bed = GTF_TO_FEATURE_BED.out.exon_bed.first()
 
     // isocirc
     ch_isocirc_bed = channel.empty()
@@ -233,6 +241,37 @@ workflow CIRCRNA_ANALYSIS {
             CIRCRNA_ANNOTATE(ch_for_annotate, fasta, gtf)
             // CIRCRNA_ANNOTATE uses nf-core modules with `topic: versions` —
             // versions are collected automatically; no ch_versions mixing needed.
+
+            // ── Finalize: type + expression + clean TSV ─────────────────────────────
+            // annotated_tsv has N items per sample (one per category); expression files have 1.
+            // Use combine(by:0) for N:1 matching, not join() which is 1:1 only.
+            // circfl emits a list (mRG + RG pass files); pick mRG when present.
+            // ciri_long uses optional:true — fill missing samples with NO_FILE via remainder join.
+            ch_iso_expr  = params.run_isocirc  ? ISOCIRC.out.expr.map { m, f -> [m.id, f] }
+                                               : ch_fastq.map { m, _ -> [m.id, file('NO_FILE')] }
+            ch_fl_expr   = params.run_circfl   ? CIRCFL_SEQ.out.expr.map { m, files ->
+                               def fl = files instanceof List ? files : [files]
+                               [m.id, fl.find { it.toString().contains('/mRG/') } ?: fl[0]]
+                           }                   : ch_fastq.map { m, _ -> [m.id, file('NO_FILE')] }
+            ch_nick_expr = params.run_circnick ? CIRCNICK_LRS.out.annotated.map { m, f -> [m.id, f] }
+                                               : ch_fastq.map { m, _ -> [m.id, file('NO_FILE')] }
+            // ciri_long: guarantee one entry per sample even when expression file is absent
+            ch_ciri_expr = params.run_cirilong
+                ? ch_fastq.map { m, _ -> [m.id] }
+                    .join(CIRI_LONG.out.expr.map { m, f -> [m.id, f] }, remainder: true)
+                    .map { id, f -> [id, f ?: file('NO_FILE')] }
+                : ch_fastq.map { m, _ -> [m.id, file('NO_FILE')] }
+
+            ch_for_finalize = CIRCRNA_ANNOTATE.out.annotated_tsv
+                .map     { meta, tsv -> [meta.id, meta, tsv] }
+                .combine ( ch_iso_expr,  by: 0 )
+                .combine ( ch_fl_expr,   by: 0 )
+                .combine ( ch_nick_expr, by: 0 )
+                .combine ( ch_ciri_expr, by: 0 )
+                .map     { id, meta, tsv, iso, fl, nick, ciri -> [meta, tsv, iso, ciri, fl, nick] }
+
+            CIRCRNA_FINALIZE(ch_for_finalize, ch_gene_bed, ch_exon_bed)
+            ch_versions = ch_versions.mix(CIRCRNA_FINALIZE.out.versions.first())
         }
     }
 
@@ -242,6 +281,10 @@ workflow CIRCRNA_ANALYSIS {
     circfl_bed12    = ch_circfl_bed
     cirilong_bed12  = ch_cirilong_bed
     circnick_bed12  = ch_circnick_bed
+
+    // Feature BED files (for type classification, passed to crossrun merge)
+    gene_bed = ch_gene_bed
+    exon_bed = ch_exon_bed
 
     // Discovery: hybrid, all isoforms, unfiltered
     discovery_bed  = ch_n_active >= 2 ? CIRCRNA_SMART_MERGE.out.hybrid_bed  : channel.empty()
@@ -270,6 +313,7 @@ workflow CIRCRNA_ANALYSIS {
     annotated_gff = (!params.skip_annotation && ch_n_active >= 2) ? CIRCRNA_ANNOTATE.out.annotated_gff : channel.empty()
     spliced_fasta = (!params.skip_annotation && ch_n_active >= 2) ? CIRCRNA_ANNOTATE.out.spliced_fasta : channel.empty()
     annotated_tsv = (!params.skip_annotation && ch_n_active >= 2) ? CIRCRNA_ANNOTATE.out.annotated_tsv : channel.empty()
+    clean_tsv     = (!params.skip_annotation && ch_n_active >= 2) ? CIRCRNA_FINALIZE.out.clean          : channel.empty()
 
     versions = ch_versions
 }

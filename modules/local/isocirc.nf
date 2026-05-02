@@ -14,6 +14,7 @@ process ISOCIRC {
 
     output:
     tuple val(meta), path("isocirc_output/isocirc.bed"), emit: bed
+    tuple val(meta), path("isocirc_output/isocirc.out"), emit: expr
     tuple val(meta), path("isocirc_output/"),            emit: output_dir
     path  "versions.yml",                                emit: versions
 

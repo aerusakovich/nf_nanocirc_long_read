@@ -16,10 +16,11 @@ process CIRI_LONG {
     path  circrna_db
 
     output:
-    tuple val(meta), path("${meta.id}_cirilong/${meta.id}.info"),       emit: info
-    tuple val(meta), path("${meta.id}_cirilong/${meta.id}.isoforms"),   emit: isoforms
-    tuple val(meta), path("${meta.id}_cirilong/"),                      emit: output_dir
-    path  "versions.yml",                                               emit: versions
+    tuple val(meta), path("${meta.id}_cirilong/${meta.id}.info"),         emit: info
+    tuple val(meta), path("${meta.id}_cirilong/${meta.id}.isoforms"),     emit: isoforms
+    tuple val(meta), path("${meta.id}_cirilong/${meta.id}.expression", optional: true),   emit: expr
+    tuple val(meta), path("${meta.id}_cirilong/"),                        emit: output_dir
+    path  "versions.yml",                                                 emit: versions
 
     when:
     task.ext.when == null || task.ext.when

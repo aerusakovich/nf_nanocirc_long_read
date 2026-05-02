@@ -14,9 +14,10 @@ process CIRCFL_SEQ {
     path  gtf
 
     output:
-    tuple val(meta), path("${meta.id}_circfl/circFL_final.bed"), emit: bed
-    tuple val(meta), path("${meta.id}_circfl/"),                 emit: output_dir
-    path  "versions.yml",                                        emit: versions
+    tuple val(meta), path("${meta.id}_circfl/circFL_final.bed"),          emit: bed
+    tuple val(meta), path("${meta.id}_circfl/*/circFL_Normal_pass.txt"),  emit: expr
+    tuple val(meta), path("${meta.id}_circfl/"),                          emit: output_dir
+    path  "versions.yml",                                                  emit: versions
 
     when:
     task.ext.when == null || task.ext.when
@@ -75,7 +76,6 @@ process CIRCFL_SEQ {
         PASS_BED="${out}/RG/circFL_Normal_pass.bed"
         PASS_TXT="${out}/RG/circFL_Normal_pass.txt"
     fi
-
     circfull anno \\
         -b "\${PASS_BED}" \\
         -a anno.gtf.gz \\
