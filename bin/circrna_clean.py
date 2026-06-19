@@ -36,6 +36,7 @@ Usage:
 import argparse
 import csv
 import os
+import subprocess
 from collections import defaultdict
 
 CLEAN_COLUMNS = [
@@ -294,10 +295,14 @@ def main():
     circfl_idx = load_circfl_expr(args.circfl_expr)
     nick_idx   = load_nick_expr(args.nick_expr)
 
-    # Read annotated TSV; skip isoform rows
     with open(args.annotated_tsv) as fh:
         reader = csv.DictReader(fh, delimiter='\t')
-        rows = [row for row in reader if '|iso' not in row.get('bsj_id', '')]
+        rows = list(reader)
+
+    n_main = sum(1 for r in rows if '|iso' not in r.get('bsj_id', ''))
+    n_iso  = len(rows) - n_main
+    if n_iso:
+        print(f'[circrna_clean] {n_main} main circRNAs + {n_iso} isoforms')
 
     # Classify types (batch bedtools call)
     types = classify_types(rows, args.gene_bed, args.exon_bed)

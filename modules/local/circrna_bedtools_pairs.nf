@@ -20,7 +20,7 @@ process CIRCRNA_BEDTOOLS_PAIRS {
 
     script:
     def names_str = tool_names.join(" ")
-    def files_str = bed_files.collect { it.toString() }.join(" ")
+    def files_str = bed_files.collect { f -> f.toString() }.join(" ")
     """
     tool_names=(${names_str})
     bed_files=(${files_str})

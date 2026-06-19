@@ -7,8 +7,8 @@ process CIRCRNA_SMART_MERGE {
         'quay.io/biocontainers/python:3.9--1' }"
 
     input:
-    tuple val(meta), val(tool_names), path(bed_files)
-    tuple val(meta), path(pair_files)
+    tuple val(meta),  val(tool_names), path(bed_files)
+    tuple val(meta2), path(pair_files)
     val   n_active
 
     output:
@@ -27,8 +27,8 @@ process CIRCRNA_SMART_MERGE {
 
     script:
     def names_arg = tool_names.join(' ')
-    def files_arg = bed_files.collect { it.toString() }.join(' ')
-    def pairs_arg = pair_files.collect { it.toString() }.join(' ')
+    def files_arg = bed_files.collect { f -> f.toString() }.join(' ')
+    def pairs_arg = pair_files.collect { f -> f.toString() }.join(' ')
     """
     python3 ${projectDir}/bin/smart_merge.py \\
         --sample           ${meta.id} \\

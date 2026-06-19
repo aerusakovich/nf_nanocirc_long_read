@@ -2,10 +2,10 @@ process CIRCNICK_LRS {
     tag "$meta.id"
     label 'process_high'
 
-    containerOptions = "--writable-tmpfs"
+    containerOptions "--writable-tmpfs"
 
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'quay.io/anrusakovich/circnick-lrs:latest' :
+        'https://zenodo.org/records/20707975/files/nanocirc-circnick-lrs-v1.0.sif?download=1' :
         'quay.io/anrusakovich/circnick-lrs:latest' }"
 
     input:
@@ -23,18 +23,16 @@ process CIRCNICK_LRS {
     task.ext.when == null || task.ext.when
 
     script:
-    def args  = task.ext.args ?: ''
-    def out   = "${meta.id}_circnick"
-    def is_gz = fastq.name.endsWith('.gz')
+    def args     = task.ext.args ?: ''
+    def out      = "${meta.id}_circnick"
+    def is_gz    = fastq.name.endsWith('.gz')
+    def link_cmd = is_gz ? "ln -sf ${fastq} ${meta.id}.fq.gz" : "gzip -c ${fastq} > ${meta.id}.fq.gz"
     """
     mkdir -p ${out}
 
     # circnick-lrs requires gzipped input.
     # Use meta.id as filename — circnick uses it as the output subdirectory name.
-    ${is_gz ?
-        "ln -sf ${fastq} ${meta.id}.fq.gz" :
-        "gzip -c ${fastq} > ${meta.id}.fq.gz"
-    }
+    ${link_cmd}
 
     long_read_circRNA run \\
         --species          ${species} \\

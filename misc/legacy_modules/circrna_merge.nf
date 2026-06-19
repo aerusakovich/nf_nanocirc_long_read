@@ -7,8 +7,8 @@ process CIRCRNA_MERGE {
         'quay.io/biocontainers/python:3.9--1' }"
 
     input:
-    tuple val(meta), val(tool_names), path(bed_files)
-    tuple val(meta), path(pair_files)
+    tuple val(meta),  val(tool_names), path(bed_files)
+    tuple val(meta2), path(pair_files)
     val   n_active
 
     output:
@@ -26,11 +26,11 @@ process CIRCRNA_MERGE {
     task.ext.when == null || task.ext.when
 
     script:
-    def tool_args = [tool_names, bed_files.collect { it.toString() }]
+    def tool_args = [tool_names, bed_files.collect { f -> f.toString() }]
         .transpose()
         .collect { name, file -> "--${name} ${file}" }
         .join(" \\\n        ")
-    def pairs_arg = pair_files.collect { it.toString() }.join(" ")
+    def pairs_arg = pair_files.collect { f -> f.toString() }.join(" ")
     """
     # ── Step 1: BSJ-based grouping (strict + relaxed) ────────
     python3 ${projectDir}/bin/merge_circrna.py \\

@@ -21,7 +21,7 @@ process CIRCRNA_EXON_MERGE {
     task.ext.when == null || task.ext.when
 
     script:
-    def pairs_arg = pair_files.collect { it.toString() }.join(" \\\n        ")
+    def pairs_arg = pair_files.collect { f -> f.toString() }.join(" \\\n        ")
     """
     python3 ${projectDir}/bin/merge_exon_based.py \\
         --sample      ${meta.id} \\

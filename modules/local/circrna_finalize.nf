@@ -38,7 +38,7 @@ process CIRCRNA_FINALIZE {
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        python: \$(python --version 2>&1 | sed 's/Python //')
+        python: \$(python3 --version | sed 's/Python //')
         bedtools: \$(bedtools --version | head -1 | sed 's/bedtools v//')
     END_VERSIONS
     """

@@ -3,7 +3,7 @@ process ISOCIRC {
     label 'process_high'
 
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'quay.io/anrusakovich/isocirc:latest' :
+        'https://zenodo.org/records/20707975/files/nanocirc-isocirc-v1.0.sif?download=1' :
         'quay.io/anrusakovich/isocirc:latest' }"
 
     input:
