@@ -34,8 +34,7 @@ workflow CIRCRNA_ANNOTATE {
 
     // ── Index genome (once, reused for all samples / categories) ──────────
     SAMTOOLS_FAIDX(
-        channel.value([ [id: 'genome'], fasta, [] ]),
-        false
+        channel.value([ [id: 'genome'], fasta, [] ])
     )
 
     // Build singleton genome channel [meta, fasta, fai] for GFFCOMPARE

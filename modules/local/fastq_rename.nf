@@ -14,6 +14,6 @@ process FASTQ_RENAME {
 
     script:
     """
-    ln -s ${fastq} ${meta.id}.fastq.gz
+    [ "${fastq}" = "${meta.id}.fastq.gz" ] || ln -s ${fastq} ${meta.id}.fastq.gz
     """
 }

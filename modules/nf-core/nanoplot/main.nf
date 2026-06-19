@@ -11,9 +11,8 @@ process NANOPLOT {
     tuple val(meta), path(ontfile)
 
     output:
-    tuple val(meta), path("*.html")                , emit: html
-    tuple val(meta), path("*.png") , optional: true, emit: png
-    tuple val(meta), path("*.txt")                 , emit: txt
+    tuple val(meta), path("*.html"), emit: html
+    tuple val(meta), path("*.txt") , emit: txt
     path  "versions.yml"                           , emit: versions
 
     when:

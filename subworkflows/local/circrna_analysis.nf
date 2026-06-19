@@ -44,8 +44,8 @@ workflow CIRCRNA_ANALYSIS {
     // Gene/exon BED files derived from GTF — used for type classification
     GTF_TO_FEATURE_BED(gtf)
     ch_versions = ch_versions.mix(GTF_TO_FEATURE_BED.out.versions)
-    def ch_gene_bed = GTF_TO_FEATURE_BED.out.gene_bed.first()
-    def ch_exon_bed = GTF_TO_FEATURE_BED.out.exon_bed.first()
+    def ch_gene_bed = GTF_TO_FEATURE_BED.out.gene_bed
+    def ch_exon_bed = GTF_TO_FEATURE_BED.out.exon_bed
 
     // isocirc
     def ch_isocirc_bed = channel.empty()
@@ -76,7 +76,7 @@ workflow CIRCRNA_ANALYSIS {
         )
         CIRILONG_TO_BED12 ( CIRI_LONG.out.info )
         ch_cirilong_bed = CIRILONG_TO_BED12.out.bed12
-        ch_versions     = ch_versions.mix(PREPARE_GENOME.out.versions.first())
+        ch_versions     = ch_versions.mix(PREPARE_GENOME.out.versions)
         ch_versions     = ch_versions.mix(CIRI_LONG.out.versions.first())
         ch_versions     = ch_versions.mix(CIRILONG_TO_BED12.out.versions.first())
     }

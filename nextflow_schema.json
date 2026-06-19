@@ -206,6 +206,12 @@
                     "default": false,
                     "description": "Skip MultiQC.",
                     "fa_icon": "fas fa-forward"
+                },
+                "skip_annotation": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Skip GFF/FASTA/annotated TSV generation.",
+                    "fa_icon": "fas fa-forward"
                 }
             }
         },
