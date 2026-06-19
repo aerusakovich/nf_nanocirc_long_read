@@ -22,17 +22,6 @@ include { getGenomeAttribute      } from './subworkflows/local/utils_nfcore_nano
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    GENOME PARAMETER VALUES
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-*/
-
-// TODO nf-core: Remove this line if you don't need a FASTA file
-//   This is an example of how to use getGenomeAttribute() to fetch parameters
-//   from igenomes.config using `--genome`
-params.fasta = getGenomeAttribute('fasta')
-
-/*
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     NAMED WORKFLOWS FOR PIPELINE
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
@@ -65,6 +54,20 @@ workflow NFCORE_NANOCIRC {
 workflow {
 
     main:
+    params.fasta = getGenomeAttribute('fasta')
+
+    // Nextflow v2 strict parser delivers all CLI params as strings.
+    // Coerce declared-boolean params before nf-schema validation runs.
+    [
+        'run_isocirc', 'run_circfl', 'run_cirilong', 'run_circnick',
+        'run_crossrun_merge', 'run_benchmark_modes',
+        'skip_qc', 'skip_fastqc', 'skip_nanoplot', 'skip_multiqc', 'skip_annotation',
+        'igenomes_ignore', 'plaintext_email', 'monochrome_logs', 'validate_params',
+        'version', 'help', 'help_full', 'show_hidden'
+    ].each { p ->
+        if (params[p] instanceof String) params[p] = params[p].toBoolean()
+    }
+
     //
     // SUBWORKFLOW: Run initialisation tasks
     //

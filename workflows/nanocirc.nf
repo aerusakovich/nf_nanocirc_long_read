@@ -41,7 +41,7 @@ workflow NANOCIRC {
     if (!params.skip_qc) {
         if (!params.skip_fastqc) {
             FASTQC ( ch_fastq )
-            ch_multiqc_files = ch_multiqc_files.mix(FASTQC.out.zip.collect{ it[1] })
+            ch_multiqc_files = ch_multiqc_files.mix(FASTQC.out.zip.collect{ v -> v[1] })
             ch_versions      = ch_versions.mix(FASTQC.out.versions.first())
         }
         if (!params.skip_nanoplot) {
@@ -109,11 +109,11 @@ workflow NANOCIRC {
                 }
         }
 
-        ch_crossrun = group_by_tier(
+        def ch_crossrun = group_by_tier.call(
                 CIRCRNA_ANALYSIS.out.discovery_bed,  CIRCRNA_ANALYSIS.out.discovery_conf,  'discovery')
-            .mix(group_by_tier(
+            .mix(group_by_tier.call(
                 CIRCRNA_ANALYSIS.out.balanced_bed,   CIRCRNA_ANALYSIS.out.balanced_conf,   'balanced'))
-            .mix(group_by_tier(
+            .mix(group_by_tier.call(
                 CIRCRNA_ANALYSIS.out.high_conf_bed,  CIRCRNA_ANALYSIS.out.high_conf_conf,  'high_confidence'))
 
         CIRCRNA_CROSSRUN_MERGE (
@@ -127,7 +127,7 @@ workflow NANOCIRC {
     //
     // Collate and save software versions
     //
-    def topic_versions = Channel.topic("versions")
+    def topic_versions = channel.topic("versions")
         .distinct()
         .branch { entry ->
             versions_file: entry instanceof Path
@@ -157,24 +157,24 @@ workflow NANOCIRC {
     // MODULE: MultiQC
     //
     if (!params.skip_multiqc) {
-        ch_multiqc_config        = channel.fromPath(
+        def ch_multiqc_config        = channel.fromPath(
             "$projectDir/assets/multiqc_config.yml", checkIfExists: true)
-        ch_multiqc_custom_config = params.multiqc_config ?
+        def ch_multiqc_custom_config = params.multiqc_config ?
             channel.fromPath(params.multiqc_config, checkIfExists: true) :
             channel.empty()
-        ch_multiqc_logo          = params.multiqc_logo ?
+        def ch_multiqc_logo          = params.multiqc_logo ?
             channel.fromPath(params.multiqc_logo, checkIfExists: true) :
             channel.empty()
 
-        summary_params      = paramsSummaryMap(
+        def summary_params      = paramsSummaryMap(
             workflow, parameters_schema: "nextflow_schema.json")
-        ch_workflow_summary = channel.value(paramsSummaryMultiqc(summary_params))
+        def ch_workflow_summary = channel.value(paramsSummaryMultiqc(summary_params))
         ch_multiqc_files = ch_multiqc_files.mix(
             ch_workflow_summary.collectFile(name: 'workflow_summary_mqc.yaml'))
-        ch_multiqc_custom_methods_description = params.multiqc_methods_description ?
+        def ch_multiqc_custom_methods_description = params.multiqc_methods_description ?
             file(params.multiqc_methods_description, checkIfExists: true) :
             file("$projectDir/assets/methods_description_template.yml", checkIfExists: true)
-        ch_methods_description                = channel.value(
+        def ch_methods_description                = channel.value(
             methodsDescriptionText(ch_multiqc_custom_methods_description))
 
         ch_multiqc_files = ch_multiqc_files.mix(ch_collated_versions)

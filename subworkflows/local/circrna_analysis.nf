@@ -13,8 +13,9 @@ include { CIRCNICK_LIFTOVER      } from '../../modules/local/circnick_liftover'
 include { CIRILONG_TO_BED12      } from '../../modules/local/cirilong_to_bed12'
 include { CIRCNICK_TO_BED12      } from '../../modules/local/circnick_to_bed12'
 include { CIRCRNA_BEDTOOLS_PAIRS } from '../../modules/local/circrna_bedtools_pairs'
-include { CIRCRNA_MERGE          } from '../../modules/local/circrna_merge'
-include { CIRCRNA_EXON_MERGE     } from '../../modules/local/circrna_exon_merge'
+// Legacy benchmark modes — see misc/legacy_modules/
+include { CIRCRNA_MERGE          } from '../../misc/legacy_modules/circrna_merge'
+include { CIRCRNA_EXON_MERGE     } from '../../misc/legacy_modules/circrna_exon_merge'
 include { CIRCRNA_SMART_MERGE    } from '../../modules/local/circrna_smart_merge'
 include { CIRCRNA_CONFIDENCE_FILTER as CIRCRNA_FILTER_BALANCED           } from '../../modules/local/circrna_confidence_filter'
 include { CIRCRNA_CONFIDENCE_FILTER as CIRCRNA_FILTER_HIGH_CONFIDENCE    } from '../../modules/local/circrna_confidence_filter'
@@ -38,16 +39,16 @@ workflow CIRCRNA_ANALYSIS {
 
     main:
 
-    ch_versions = channel.empty()
+    def ch_versions = channel.empty()
 
     // Gene/exon BED files derived from GTF — used for type classification
     GTF_TO_FEATURE_BED(gtf)
     ch_versions = ch_versions.mix(GTF_TO_FEATURE_BED.out.versions)
-    ch_gene_bed = GTF_TO_FEATURE_BED.out.gene_bed.first()
-    ch_exon_bed = GTF_TO_FEATURE_BED.out.exon_bed.first()
+    def ch_gene_bed = GTF_TO_FEATURE_BED.out.gene_bed.first()
+    def ch_exon_bed = GTF_TO_FEATURE_BED.out.exon_bed.first()
 
     // isocirc
-    ch_isocirc_bed = channel.empty()
+    def ch_isocirc_bed = channel.empty()
     if (params.run_isocirc) {
         ISOCIRC ( ch_fastq, fasta, gtf, circrna_db )
         ch_isocirc_bed = ISOCIRC.out.bed
@@ -55,7 +56,7 @@ workflow CIRCRNA_ANALYSIS {
     }
 
     // circFL-seq
-    ch_circfl_bed = channel.empty()
+    def ch_circfl_bed = channel.empty()
     if (params.run_circfl) {
         CIRCFL_SEQ ( ch_fastq, fasta, gtf )
         ch_circfl_bed = CIRCFL_SEQ.out.bed
@@ -63,7 +64,7 @@ workflow CIRCRNA_ANALYSIS {
     }
 
     // CIRI-long
-    ch_cirilong_bed = channel.empty()
+    def ch_cirilong_bed = channel.empty()
     if (params.run_cirilong) {
         PREPARE_GENOME ( fasta )
         CIRI_LONG (
@@ -81,13 +82,13 @@ workflow CIRCRNA_ANALYSIS {
     }
 
     // circnick-lrs
-    ch_circnick_bed = channel.empty()
+    def ch_circnick_bed = channel.empty()
     if (params.run_circnick) {
         CIRCNICK_LRS ( ch_fastq, params.circnick_species )
         ch_versions = ch_versions.mix(CIRCNICK_LRS.out.versions.first())
 
         if (params.circnick_liftover_chain) {
-            ch_chain = channel.fromPath(params.circnick_liftover_chain, checkIfExists: true)
+            def ch_chain = channel.fromPath(params.circnick_liftover_chain, checkIfExists: true)
 
             CIRCNICK_LIFTOVER (
                 CIRCNICK_LRS.out.annotated,
@@ -114,7 +115,7 @@ workflow CIRCRNA_ANALYSIS {
         ch_versions     = ch_versions.mix(CIRCNICK_TO_BED12.out.versions.first())
     }
 
-    ch_all_beds = channel.empty()
+    def ch_all_beds = channel.empty()
 
     if (params.run_isocirc) {
         ch_all_beds = ch_all_beds.mix(
@@ -138,13 +139,13 @@ workflow CIRCRNA_ANALYSIS {
     }
 
     // Group by sample: [ meta, [tool_names], [bed_files] ]
-    ch_beds_collected = ch_all_beds
+    def ch_beds_collected = ch_all_beds
         .groupTuple()
         .map { meta, tool_names, bed_files ->
             [ meta, tool_names, bed_files ]
         }
 
-    ch_n_active = params.run_isocirc  ? 1 : 0
+    def ch_n_active = params.run_isocirc  ? 1 : 0
     ch_n_active = params.run_circfl   ? ch_n_active + 1 : ch_n_active
     ch_n_active = params.run_cirilong ? ch_n_active + 1 : ch_n_active
     ch_n_active = params.run_circnick ? ch_n_active + 1 : ch_n_active
@@ -163,10 +164,10 @@ workflow CIRCRNA_ANALYSIS {
         CIRCRNA_BEDTOOLS_PAIRS ( ch_beds_collected )
         ch_versions = ch_versions.mix(CIRCRNA_BEDTOOLS_PAIRS.out.versions.first())
 
-        ch_for_merge = ch_beds_collected
+        def ch_for_merge = ch_beds_collected
             .join(CIRCRNA_BEDTOOLS_PAIRS.out.pairs, by: 0)
 
-        // Legacy merge modes (--run_benchmark_modes)
+        // Legacy benchmark modes — see misc/legacy_modules/
         if (params.run_benchmark_modes) {
             CIRCRNA_MERGE (
                 ch_for_merge.map { meta, tool_names, bed_files, pairs -> [ meta, tool_names, bed_files ] },
@@ -190,24 +191,24 @@ workflow CIRCRNA_ANALYSIS {
         ch_versions = ch_versions.mix(CIRCRNA_SMART_MERGE.out.versions.first())
 
         // Build per-mode filter input channels — both use hybrid as input
-        ch_hybrid = CIRCRNA_SMART_MERGE.out.hybrid_bed
+        def ch_hybrid = CIRCRNA_SMART_MERGE.out.hybrid_bed
             .join(CIRCRNA_SMART_MERGE.out.hybrid_conf, by: 0)
 
-        ch_for_balanced        = ch_hybrid.map { meta, bed, tsv -> [ meta + [category: 'hybrid'], bed, tsv ] }
-        ch_for_high_confidence = ch_hybrid.map { meta, bed, tsv -> [ meta + [category: 'hybrid'], bed, tsv ] }
+        def ch_for_balanced        = ch_hybrid.map { meta, bed, tsv -> [ meta + [category: 'hybrid'], bed, tsv ] }
+        def ch_for_high_confidence = ch_hybrid.map { meta, bed, tsv -> [ meta + [category: 'hybrid'], bed, tsv ] }
 
         CIRCRNA_FILTER_BALANCED        ( ch_for_balanced )
         CIRCRNA_FILTER_HIGH_CONFIDENCE ( ch_for_high_confidence )
         ch_versions = ch_versions.mix(CIRCRNA_FILTER_BALANCED.out.versions.first())
 
         if (params.run_benchmark_modes) {
-            ch_consensus = CIRCRNA_SMART_MERGE.out.consensus_bed
+            def ch_consensus = CIRCRNA_SMART_MERGE.out.consensus_bed
                 .join(CIRCRNA_SMART_MERGE.out.consensus_conf, by: 0)
 
-            ch_xstruct = CIRCRNA_SMART_MERGE.out.consensus_xstruct_bed
+            def ch_xstruct = CIRCRNA_SMART_MERGE.out.consensus_xstruct_bed
                 .join(CIRCRNA_SMART_MERGE.out.consensus_xstruct_conf, by: 0)
 
-            ch_for_priority = CIRCRNA_SMART_MERGE.out.priority_bed
+            def ch_for_priority = CIRCRNA_SMART_MERGE.out.priority_bed
                 .join(CIRCRNA_SMART_MERGE.out.priority_conf, by: 0)
 
             CIRCRNA_FILTER_CONSENSUS_NO_LOW  ( ch_consensus.map { meta, bed, tsv -> [ meta + [category: 'smart_consensus_no_low'],      bed, tsv ] } )
@@ -219,12 +220,12 @@ workflow CIRCRNA_ANALYSIS {
         }
 
         // Discovery is hybrid emitted directly (no filter applied)
-        ch_discovery_for_annotate = ch_hybrid
+        def ch_discovery_for_annotate = ch_hybrid
             .map { meta, bed, tsv -> [ meta + [category: 'discovery'], bed, tsv ] }
 
         if (!params.skip_annotation) {
 
-            ch_for_annotate = ch_discovery_for_annotate
+            def ch_for_annotate = ch_discovery_for_annotate
                 .mix( CIRCRNA_FILTER_BALANCED.out.bed       .join(CIRCRNA_FILTER_BALANCED.out.conf,        by: 0).map { meta, bed, tsv -> [ meta + [category: 'balanced'],        bed, tsv ] } )
                 .mix( CIRCRNA_FILTER_HIGH_CONFIDENCE.out.bed.join(CIRCRNA_FILTER_HIGH_CONFIDENCE.out.conf, by: 0).map { meta, bed, tsv -> [ meta + [category: 'high_confidence'], bed, tsv ] } )
 
@@ -247,22 +248,22 @@ workflow CIRCRNA_ANALYSIS {
             // Use combine(by:0) for N:1 matching, not join() which is 1:1 only.
             // circfl emits a list (mRG + RG pass files); pick mRG when present.
             // ciri_long uses optional:true — fill missing samples with NO_FILE via remainder join.
-            ch_iso_expr  = params.run_isocirc  ? ISOCIRC.out.expr.map { m, f -> [m.id, f] }
-                                               : ch_fastq.map { m, _ -> [m.id, file('NO_FILE')] }
-            ch_fl_expr   = params.run_circfl   ? CIRCFL_SEQ.out.expr.map { m, files ->
-                               def fl = files instanceof List ? files : [files]
-                               [m.id, fl.find { it.toString().contains('/mRG/') } ?: fl[0]]
-                           }                   : ch_fastq.map { m, _ -> [m.id, file('NO_FILE')] }
-            ch_nick_expr = params.run_circnick ? CIRCNICK_LRS.out.annotated.map { m, f -> [m.id, f] }
-                                               : ch_fastq.map { m, _ -> [m.id, file('NO_FILE')] }
+            def ch_iso_expr  = params.run_isocirc  ? ISOCIRC.out.expr.map { m, f -> [m.id, f] }
+                                                   : ch_fastq.map { m, _f -> [m.id, file('NO_FILE')] }
+            def ch_fl_expr   = params.run_circfl   ? CIRCFL_SEQ.out.expr.map { m, files ->
+                                   def fl = files instanceof List ? files : [files]
+                                   [m.id, fl.find { f -> f.toString().contains('/mRG/') } ?: fl[0]]
+                               }                   : ch_fastq.map { m, _f -> [m.id, file('NO_FILE')] }
+            def ch_nick_expr = params.run_circnick ? CIRCNICK_LRS.out.annotated.map { m, f -> [m.id, f] }
+                                                   : ch_fastq.map { m, _f -> [m.id, file('NO_FILE')] }
             // ciri_long: guarantee one entry per sample even when expression file is absent
-            ch_ciri_expr = params.run_cirilong
-                ? ch_fastq.map { m, _ -> [m.id] }
+            def ch_ciri_expr = params.run_cirilong
+                ? ch_fastq.map { m, _f -> [m.id] }
                     .join(CIRI_LONG.out.expr.map { m, f -> [m.id, f] }, remainder: true)
                     .map { id, f -> [id, f ?: file('NO_FILE')] }
-                : ch_fastq.map { m, _ -> [m.id, file('NO_FILE')] }
+                : ch_fastq.map { m, _f -> [m.id, file('NO_FILE')] }
 
-            ch_for_finalize = CIRCRNA_ANNOTATE.out.annotated_tsv
+            def ch_for_finalize = CIRCRNA_ANNOTATE.out.annotated_tsv
                 .map     { meta, tsv -> [meta.id, meta, tsv] }
                 .combine ( ch_iso_expr,  by: 0 )
                 .combine ( ch_fl_expr,   by: 0 )

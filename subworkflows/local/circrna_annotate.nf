@@ -34,7 +34,7 @@ workflow CIRCRNA_ANNOTATE {
 
     // ── Index genome (once, reused for all samples / categories) ──────────
     SAMTOOLS_FAIDX(
-        Channel.value([ [id: 'genome'], fasta, [] ]),
+        channel.value([ [id: 'genome'], fasta, [] ]),
         false
     )
 
@@ -43,7 +43,7 @@ workflow CIRCRNA_ANNOTATE {
         .map { meta, fai -> [ meta, fasta, fai ] }
 
     // Singleton reference GTF channel for GFFCOMPARE
-    ch_ref_gtf = Channel.value([ [id: 'ref'], gtf ])
+    def ch_ref_gtf = channel.value([ [id: 'ref'], gtf ])
 
     // ── Step 1: BED12 → GFF3 ─────────────────────────────────────────────
     AGAT_CONVERTBED2GFF(

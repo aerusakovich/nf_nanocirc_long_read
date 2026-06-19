@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 circnick_liftover.py
 
@@ -161,6 +161,8 @@ def lift_exon_usage(orig_path, lifted_coords, out_path):
                 continue
             exon_idx += 1
             cols = line.rstrip("\n").split("\t")
+            if ":" not in cols[4]:   # summary row — no coords, not a liftover failure
+                continue
             key  = "{}_EXON_{}".format(cols[0], exon_idx)
             if key not in lifted_coords:
                 failed_circs.add(cols[0])
@@ -195,6 +197,12 @@ def lift_exon_usage(orig_path, lifted_coords, out_path):
             # skip entire circRNA if any of its exons failed
             if circ_id in failed_circs:
                 skipped += 1
+                continue
+
+            # summary row — no coords to update, write as-is
+            if ":" not in cols[4]:
+                out.write("\t".join(cols) + "\n")
+                written += 1
                 continue
 
             new_chrom, new_start, new_end = lifted_coords[key]

@@ -3,14 +3,14 @@ process CIRCNICK_LIFTOVER {
     label 'process_low'
 
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'https://depot.galaxyproject.org/singularity/ucsc-liftover:377--ha8a8165_3' :
-        'quay.io/biocontainers/ucsc-liftover:377--ha8a8165_3' }"
+        'https://depot.galaxyproject.org/singularity/liftover:1.4.0--py313h7fbb527_0' :
+        'quay.io/biocontainers/liftover:1.4.0--py313h7fbb527_0' }"
 
     input:
-    tuple val(meta), path(annotated)    // circRNA_candidates.annotated.txt
-    tuple val(meta), path(exon_usage)   // circ_circRNA_exon_usage_length_of_exons.txt
-    tuple val(meta), path(intron_cov)   // intronCov.bed — also needs liftover
-    path  chain                         // liftOver chain file (.chain or .chain.gz)
+    tuple val(meta),  path(annotated)    // circRNA_candidates.annotated.txt
+    tuple val(meta2), path(exon_usage)   // circ_circRNA_exon_usage_length_of_exons.txt
+    tuple val(meta3), path(intron_cov)   // intronCov.bed — also needs liftover
+    path  chain                          // liftOver chain file (.chain or .chain.gz)
 
     output:
     tuple val(meta), path("${meta.id}_lifted_annotated.txt"),  emit: annotated
@@ -24,12 +24,14 @@ process CIRCNICK_LIFTOVER {
 
     script:
     """
+    export HOME=\$PWD
+
     # ── Step 1: lift annotated.txt ────────────────────────────
     tail -n +2 ${annotated} \\
         | awk 'OFS="\\t" {print \$2, \$3, \$4, \$1}' \\
         > annotated_for_lift.bed
 
-    liftOver \\
+    liftover_bed.py \\
         annotated_for_lift.bed \\
         ${chain} \\
         annotated_lifted.bed \\
@@ -37,15 +39,16 @@ process CIRCNICK_LIFTOVER {
 
     # ── Step 2: lift exon_usage ───────────────────────────────
     tail -n +2 ${exon_usage} \\
-        | awk 'OFS="\\t" {
-            split(\$5, a, "_");
-            chrom = a[length(a)];
-            split(chrom, b, ":");
-            print b[1], \$6, \$7, \$1 "_EXON_" NR
+        | awk 'BEGIN{OFS="\\t"} {
+            split(\$5, a, "_"); chrom = a[length(a)];
+            if (index(chrom, ":") > 0) {
+                split(chrom, b, ":");
+                print b[1], \$6, \$7, \$1 "_EXON_" NR
+            }
         }' \\
         > exon_for_lift.bed
 
-    liftOver \\
+    liftover_bed.py \\
         exon_for_lift.bed \\
         ${chain} \\
         exon_lifted.bed \\
@@ -57,14 +60,14 @@ process CIRCNICK_LIFTOVER {
     awk 'OFS="\\t" {print \$1, \$2, \$3, \$11 "_INTRON_" NR}' ${intron_cov} \\
         > intron_for_lift.bed
 
-    liftOver \\
+    liftover_bed.py \\
         intron_for_lift.bed \\
         ${chain} \\
         intron_lifted.bed \\
         intron_unmapped.bed
 
     # ── Step 4: rejoin all lifted coords ─────────────────────
-    python3 ${projectDir}/bin/circnick_liftover.py \\
+    circnick_liftover.py \\
         --lifted_annotated  annotated_lifted.bed \\
         --lifted_exons      exon_lifted.bed \\
         --orig_annotated    ${annotated} \\
@@ -72,7 +75,7 @@ process CIRCNICK_LIFTOVER {
         --sample            ${meta.id}
 
     # ── Step 5: rebuild lifted intron_cov from lifted coords ─
-    python3 ${projectDir}/bin/circnick_liftover_introns.py \\
+    circnick_liftover_introns.py \\
         --lifted_introns  intron_lifted.bed \\
         --orig_introns    ${intron_cov} \\
         --sample          ${meta.id}
@@ -83,7 +86,7 @@ process CIRCNICK_LIFTOVER {
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        liftover: \$(liftOver 2>&1 | head -1 | sed 's/liftOver - //')
+        liftover: \$(python -c "import liftover; print(liftover.__version__)")
     END_VERSIONS
     """
 }

@@ -11,7 +11,8 @@ process ADD_CLASS_CODES {
 
     output:
     tuple val(meta), path("*.annotated.tsv"), emit: tsv
-    tuple val("${task.process}"), val('python'), eval('python --version | sed "s/Python //"'), topic: versions, emit: versions
+    // eval() emits the version string directly into the versions topic channel at the process level (nf-schema DSL2 pattern)
+    tuple val("${task.process}"), val('python'), eval('python3 --version | sed "s/Python //"'), topic: versions, emit: versions
 
     when:
     task.ext.when == null || task.ext.when

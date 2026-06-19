@@ -33,7 +33,7 @@ process GTF_TO_FEATURE_BED {
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        python: \$(python --version 2>&1 | sed 's/Python //')
+        awk: \$(awk --version 2>/dev/null | head -1 || awk -W version 2>/dev/null | head -1 || echo "unknown")
     END_VERSIONS
     """
 }

@@ -23,8 +23,8 @@ process CIRCRNA_CROSSRUN_MERGE {
     def raw_prefix   = "${meta.id}_${meta.tier}_crossrun"
     prefix           = raw_prefix  // used in output block
     def min_count    = meta.tier == 'discovery'       ? 1
-                     : meta.tier == 'balanced'        ? Math.max(2, (int) Math.ceil(0.25 * n))
-                     : /* high_confidence */            (int) Math.ceil(0.75 * n)
+                     : meta.tier == 'balanced'        ? Math.max(2, Math.ceil(0.25 * n).toInteger())
+                     : /* high_confidence */            Math.ceil(0.75 * n).toInteger()
     """
     # ── smart_merge ────────────────────────────────────────────────────────────
     # Generates all 4 mode files; only the hybrid outputs are used below.
@@ -77,7 +77,7 @@ process CIRCRNA_CROSSRUN_MERGE {
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         bedtools: \$(bedtools --version | head -1 | sed 's/bedtools v//')
-        python: \$(python --version 2>&1 | sed 's/Python //')
+        python: \$(python3 --version | sed 's/Python //')
     END_VERSIONS
     """
 }

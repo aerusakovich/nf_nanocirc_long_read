@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 crossrun_annotate.py
 
@@ -11,6 +11,9 @@ and writes two output files:
 
   <prefix>_clean.tsv       — wet-lab-friendly: only the essential columns,
                               rows filtered to bsj_confidence >= min_count.
+                              Includes per-sample bsj/isoform consensus and,
+                              when --sample_expr_files is given, per-sample
+                              supporting_reads from the per-sample clean TSVs.
 
   <prefix>.bed12           — BED12 filtered to match <prefix>_clean.tsv.
 
@@ -20,6 +23,7 @@ Usage:
         --input_bed  GROUP_smart_consensus_hybrid.bed12 \\
         --sample_names sample1 sample2 sample3 \\
         --sample_tsvs  s1_confidence.tsv s2_confidence.tsv s3_confidence.tsv \\
+        --sample_expr_files s1_clean.tsv s2_clean.tsv s3_clean.tsv \\
         --gene_bed   genes.bed \\
         --exon_bed   exons.bed \\
         --bsj_tol 5 \\
@@ -45,8 +49,10 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--input_tsv',    required=True, help='Raw hybrid confidence TSV (read-only)')
     p.add_argument('--input_bed',    required=True, help='Raw hybrid BED12 (read-only)')
-    p.add_argument('--sample_names', nargs='+', required=True)
-    p.add_argument('--sample_tsvs',  nargs='+', required=True)
+    p.add_argument('--sample_names',      nargs='+', required=True)
+    p.add_argument('--sample_tsvs',       nargs='+', required=True)
+    p.add_argument('--sample_expr_files', nargs='*', default=[],
+                   help='Per-sample clean TSVs with supporting_reads (parallel to --sample_names)')
     p.add_argument('--gene_bed',     required=True, help='Gene-level BED (6-col, from GTF)')
     p.add_argument('--exon_bed',     required=True, help='Exon-level BED (6-col, from GTF)')
     p.add_argument('--bsj_tol',      type=int, default=5)
@@ -86,6 +92,27 @@ def load_sample_index(tsv_path):
     return index
 
 
+def load_expr_index(tsv_path):
+    """Return {(chrom, strand): [(start, end, supporting_reads)]} from a per-sample clean TSV."""
+    index = defaultdict(list)
+    if not tsv_path:
+        return index
+    try:
+        with open(tsv_path) as fh:
+            for row in csv.DictReader(fh, delimiter='\t'):
+                parsed = parse_bsj_id(row.get('bsj_id', '').split('|')[0])
+                if parsed is None:
+                    continue
+                chrom, start, end, strand = parsed
+                index[(chrom, strand)].append((
+                    start, end,
+                    row.get('supporting_reads', ''),
+                ))
+    except FileNotFoundError:
+        pass
+    return index
+
+
 def lookup(index, bsj_id, bsj_tol):
     parsed = parse_bsj_id(bsj_id)
     if parsed is None:
@@ -95,6 +122,17 @@ def lookup(index, bsj_id, bsj_tol):
         if abs(ss - cs) <= bsj_tol and abs(se - ce) <= bsj_tol:
             return bc, ic
     return '', ''
+
+
+def lookup_expr(index, bsj_id, bsj_tol):
+    parsed = parse_bsj_id(bsj_id)
+    if parsed is None:
+        return ''
+    chrom, cs, ce, strand = parsed
+    for ss, se, expr in index.get((chrom, strand), []):
+        if abs(ss - cs) <= bsj_tol and abs(se - ce) <= bsj_tol:
+            return expr
+    return ''
 
 
 # ── circRNA type classification ────────────────────────────────────────────────
@@ -198,6 +236,11 @@ def main():
     sample_indexes = {name: load_sample_index(path)
                       for name, path in zip(args.sample_names, args.sample_tsvs)}
 
+    expr_indexes = {}
+    if args.sample_expr_files:
+        for name, path in zip(args.sample_names, args.sample_expr_files):
+            expr_indexes[name] = load_expr_index(path)
+
     # Read raw input TSV once
     with open(args.input_tsv) as fh:
         reader     = csv.DictReader(fh, delimiter='\t')
@@ -211,6 +254,8 @@ def main():
     per_sample_cols = []
     for name in args.sample_names:
         per_sample_cols += [f'{name}_bsj_consensus', f'{name}_isoform_consensus']
+        if expr_indexes:
+            per_sample_cols.append(f'{name}_expression')
 
     full_fields  = in_fields + ['n_samples', 'type'] + per_sample_cols
     clean_fields = CLEAN_COLUMNS + per_sample_cols
@@ -233,6 +278,9 @@ def main():
                 bc, ic = lookup(sample_indexes[name], bsj_id, args.bsj_tol)
                 row[f'{name}_bsj_consensus']     = bc
                 row[f'{name}_isoform_consensus'] = ic
+                if expr_indexes:
+                    row[f'{name}_expression'] = lookup_expr(
+                        expr_indexes.get(name, {}), bsj_id, args.bsj_tol)
 
             full_w.writerow(row)
 

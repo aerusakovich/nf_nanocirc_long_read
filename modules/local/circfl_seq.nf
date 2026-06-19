@@ -2,10 +2,10 @@ process CIRCFL_SEQ {
     tag "$meta.id"
     label 'process_high_memory'
 
-    containerOptions = "--writable-tmpfs"
+    containerOptions "--writable-tmpfs"
 
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'quay.io/anrusakovich/circfl-seq:latest' :
+        'https://zenodo.org/records/20707975/files/nanocirc-circfl-seq-v1.0.sif?download=1' :
         'quay.io/anrusakovich/circfl-seq:latest' }"
 
     input:
